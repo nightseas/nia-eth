@@ -1,0 +1,21 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# File        : cocotb-config
+# Description : A stand-in for cocotb-config that answers --makefiles, --share, --prefix
+#               and --python-bin, so make check and make list run on a machine with no
+#               cocotb installed.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : POSIX shell
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+case "$1" in
+--makefiles|--share) echo "$HERE" ;;
+--prefix) echo "$HERE" ;;
+--python-bin) command -v python3 ;;
+*) echo "" ;;
+esac

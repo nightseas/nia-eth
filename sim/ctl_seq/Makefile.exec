@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.exec
+# Description : The cocotb set for the register access executor and its arbiter.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_ctl_seq_exec
+COCOTB_RESULTS_FILE ?= results_ctl_seq_exec.xml
+
+TOPLEVEL_LANG ?= verilog
+SIM           ?= verilator
+
+HERE    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+THIS_MK := $(lastword $(MAKEFILE_LIST))
+RTL_DIR := $(HERE)/../../rtl/ctl
+
+EXEC_SRC ?= $(RTL_DIR)/dcmac_axil_exec.sv
+VERILOG_SOURCES := $(EXEC_SRC)
+
+TOPLEVEL := dcmac_axil_exec
+MODULE   := test_dcmac_axil_exec
+
+export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
+
+export N_REQ    ?= 3
+export RR_START ?= 1
+export AW       ?= 20
+export TMO_CYC  ?= 256
+
+SEED ?=
+ifneq ($(SEED),)
+    export RANDOM_SEED        := $(SEED)
+    export COCOTB_RANDOM_SEED := $(SEED)
+endif
+
+ifeq ($(SIM),verilator)
+    EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
+                  -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-SELRANGE
+    COMPILE_ARGS += -GN_REQ=$(N_REQ) -GRR_START=$(RR_START) -GAW=$(AW) -GTMO_CYC=$(TMO_CYC)
+endif
+
+COCOTB_HDL_TIMEUNIT      ?= 1ns
+COCOTB_HDL_TIMEPRECISION ?= 1ps
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+
+.PHONY: nopri five notmo lint
+nopri:
+	$(MAKE) -f $(THIS_MK) RR_START=0
+
+five:
+	$(MAKE) -f $(THIS_MK) N_REQ=5
+
+notmo:
+	$(MAKE) -f $(THIS_MK) TMO_CYC=0
+
+lint:
+	verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-VARHIDDEN \
+	  -GN_REQ=$(N_REQ) -GRR_START=$(RR_START) -GAW=$(AW) -GTMO_CYC=$(TMO_CYC) \
+	  --top-module $(TOPLEVEL) $(EXEC_SRC)

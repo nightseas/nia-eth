@@ -1,0 +1,86 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.seam
+# Description : The cocotb set for the single client segmented subsystem, which brings the
+#               control plane and the PHY stub in with the instrument.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_pktgen_seam
+COCOTB_RESULTS_FILE ?= results_pktgen_seam.xml
+
+TOPLEVEL_LANG ?= verilog
+SIM           ?= verilator
+
+HERE      := $(shell pwd)
+RTL_DIR   := $(HERE)/../../rtl
+CTL_DIR   := $(RTL_DIR)/ctl
+MODEL_DIR := $(HERE)/../model
+export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
+
+VERILOG_SOURCES := \
+  $(CTL_DIR)/dcmac_ctl_pkg.sv \
+  $(CTL_DIR)/dcmac_ctl_seq.sv \
+  $(CTL_DIR)/wdt.sv \
+  $(CTL_DIR)/dcmac_link_sample.sv \
+  $(CTL_DIR)/dcmac_axil_exec.sv \
+  $(CTL_DIR)/dcmac_axil_arb.sv \
+  $(CTL_DIR)/dcmac_mac_ctl_fsm.sv \
+  $(CTL_DIR)/dcmac_link_ctl.sv \
+  $(RTL_DIR)/dcmac_sync2.sv \
+  $(RTL_DIR)/dcmac_csr_snap.sv \
+  $(RTL_DIR)/dcmac_seg_fifo.sv \
+  $(RTL_DIR)/pktgen_seg/dcmac_seg_ctx.sv \
+  $(RTL_DIR)/pktgen_seg/dcmac_seg_pktgen_chain.sv \
+  $(RTL_DIR)/pktgen_seg/dcmac_seg_pktmon_chain.sv \
+  $(RTL_DIR)/dcmac_seg_pktgen.sv \
+  $(RTL_DIR)/gt_rst_req_gate.sv \
+  $(RTL_DIR)/dcmac_phy_model.sv \
+  $(RTL_DIR)/dcmac_pktgen_top.sv
+
+TOPLEVEL := dcmac_pktgen_top
+MODULE   := test_dcmac_pktgen_top
+
+export N_SEG   ?= 2
+export SEG_W   ?= 128
+export USR_MHZ ?= 250
+
+export SEG_CYC_PER_MS ?= 40
+export CTL_CYC_PER_MS ?= 25
+export T_RXDP_MS      ?= 2
+export T_SERDES_MS    ?= 2
+export LINK_WDT_MS    ?= 20
+export T_SAMPLE_MS    ?= 5
+
+SEED ?=
+ifneq ($(SEED),)
+    export RANDOM_SEED        := $(SEED)
+    export COCOTB_RANDOM_SEED := $(SEED)
+endif
+
+ifeq ($(SIM),verilator)
+    EXTRA_ARGS += --trace --trace-structs
+    EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
+                  -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNSIGNED -Wno-CMPCONST \
+                  -Wno-SELRANGE -Wno-DECLFILENAME -Wno-CASEINCOMPLETE
+    COMPILE_ARGS += -GN_SEG=$(N_SEG) -GSEG_W=$(SEG_W)
+    COMPILE_ARGS += -GSEG_CYC_PER_MS=$(SEG_CYC_PER_MS) -GCTL_CYC_PER_MS=$(CTL_CYC_PER_MS)
+    COMPILE_ARGS += -GT_RXDP_MS=$(T_RXDP_MS) -GT_SERDES_MS=$(T_SERDES_MS)
+    COMPILE_ARGS += -GLINK_WDT_MS=$(LINK_WDT_MS) -GT_SAMPLE_MS=$(T_SAMPLE_MS)
+endif
+
+PLUSARGS += +nia_mon_no_stop
+
+COCOTB_HDL_TIMEUNIT      ?= 1ns
+COCOTB_HDL_TIMEPRECISION ?= 1ps
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+
+.PHONY: elab-check
+elab-check:
+	verilator --lint-only -sv -Wno-TIMESCALEMOD -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC \
+	  --top-module $(TOPLEVEL) $(VERILOG_SOURCES)

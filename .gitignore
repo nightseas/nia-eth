@@ -1,0 +1,16 @@
+# all run output
+build/
+sim_build/
+sim_build_*/
+obj_dir/
+obj_*/
+__pycache__/
+*.pyc
+*.log
+*.vcd
+*.o
+*.so
+*.a
+*.gch
+results*.xml
+.Xil/

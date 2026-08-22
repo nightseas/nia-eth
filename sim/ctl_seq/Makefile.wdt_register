@@ -1,0 +1,69 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.wdt_register
+# Description : The cocotb set for the runtime watchdog period register.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_ctl_seq_wdt_register
+COCOTB_RESULTS_FILE ?= results_ctl_seq_wdt_register.xml
+
+TOPLEVEL_LANG ?= verilog
+SIM           ?= verilator
+
+HERE    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+THIS_MK := $(lastword $(MAKEFILE_LIST))
+RTL_DIR := $(HERE)/../../rtl
+
+CSR_SRC ?= $(RTL_DIR)/ctl/dcmac_link_csr.sv
+SNAP_SRC ?= $(RTL_DIR)/dcmac_csr_snap.sv
+
+VERILOG_SOURCES := $(SNAP_SRC) $(CSR_SRC)
+
+TOPLEVEL := dcmac_link_csr
+MODULE   := test_dcmac_link_csr_wdt
+
+export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
+
+N_GROUP         ?= 1
+LINK_WDT_MS     ?= 40
+LINK_WDT_MS_MIN ?= 10
+LINK_WDT_MS_MAX ?= 60000
+export N_GROUP LINK_WDT_MS LINK_WDT_MS_MIN LINK_WDT_MS_MAX
+
+SEED ?=
+ifneq ($(SEED),)
+    export RANDOM_SEED        := $(SEED)
+    export COCOTB_RANDOM_SEED := $(SEED)
+endif
+
+ifeq ($(SIM),verilator)
+    EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
+                  -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-SELRANGE \
+                  -Wno-DECLFILENAME
+    COMPILE_ARGS += -GN_GROUP=$(N_GROUP) -GLINK_WDT_MS=$(LINK_WDT_MS) \
+                    -GLINK_WDT_MS_MIN=$(LINK_WDT_MS_MIN) -GLINK_WDT_MS_MAX=$(LINK_WDT_MS_MAX)
+endif
+
+COCOTB_HDL_TIMEUNIT      ?= 1ns
+COCOTB_HDL_TIMEPRECISION ?= 1ps
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+
+.PHONY: dual narrow lint
+dual:
+	$(MAKE) -f $(THIS_MK) N_GROUP=2
+
+narrow:
+	$(MAKE) -f $(THIS_MK) LINK_WDT_MS=100 LINK_WDT_MS_MIN=50 LINK_WDT_MS_MAX=500
+
+lint:
+	verilator --lint-only -sv --timing -Wall -Wno-DECLFILENAME -Wno-VARHIDDEN \
+	  -Wno-UNUSEDSIGNAL -Wno-SYNCASYNCNET -Wno-CMPCONST \
+	  -GN_GROUP=$(N_GROUP) -GLINK_WDT_MS=$(LINK_WDT_MS) \
+	  -GLINK_WDT_MS_MIN=$(LINK_WDT_MS_MIN) -GLINK_WDT_MS_MAX=$(LINK_WDT_MS_MAX) \
+	  --top-module dcmac_link_csr $(SNAP_SRC) $(CSR_SRC)

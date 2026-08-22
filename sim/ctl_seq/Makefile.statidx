@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.statidx
+# Description : The cocotb set for the statistics index register of the control plane
+#               register block.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_ctl_seq_statidx
+COCOTB_RESULTS_FILE ?= results_ctl_seq_statidx.xml
+
+TOPLEVEL_LANG ?= verilog
+SIM           ?= verilator
+
+HERE    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+THIS_MK := $(lastword $(MAKEFILE_LIST))
+RTL_DIR := $(HERE)/../../rtl
+
+CSR_SRC ?= $(RTL_DIR)/ctl/dcmac_link_csr.sv
+SNAP_SRC ?= $(RTL_DIR)/dcmac_csr_snap.sv
+
+VERILOG_SOURCES := $(SNAP_SRC) $(CSR_SRC)
+
+TOPLEVEL := dcmac_link_csr
+MODULE   := test_dcmac_link_csr_statidx
+
+export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
+
+STAT_IDX_MAX ?= 43
+export STAT_IDX_MAX
+
+SEED ?=
+ifneq ($(SEED),)
+    export RANDOM_SEED        := $(SEED)
+    export COCOTB_RANDOM_SEED := $(SEED)
+endif
+
+ifeq ($(SIM),verilator)
+    EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
+                  -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-SELRANGE \
+                  -Wno-DECLFILENAME
+    COMPILE_ARGS += -GSTAT_IDX_MAX=$(STAT_IDX_MAX)
+endif
+
+COCOTB_HDL_TIMEUNIT      ?= 1ns
+COCOTB_HDL_TIMEPRECISION ?= 1ps
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+
+.PHONY: defaultmax lint
+defaultmax:
+	$(MAKE) -f $(THIS_MK) STAT_IDX_MAX=255
+
+lint:
+	verilator --lint-only -sv --timing -Wall -Wno-DECLFILENAME -Wno-VARHIDDEN \
+	  -Wno-UNUSEDSIGNAL -Wno-SYNCASYNCNET \
+	  -GSTAT_IDX_MAX="8'd$(STAT_IDX_MAX)" --top-module dcmac_link_csr $(SNAP_SRC) $(CSR_SRC)

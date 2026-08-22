@@ -1,0 +1,115 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.link_ctl
+# Description : The cocotb set for the control plane as a whole, from bring-up through
+#               recovery.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_ctl_seq_link_ctl
+COCOTB_RESULTS_FILE ?= results_ctl_seq_link_ctl.xml
+
+TOPLEVEL_LANG ?= verilog
+SIM           ?= verilator
+
+HERE    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+THIS_MK := $(lastword $(MAKEFILE_LIST))
+CTL_DIR := $(HERE)/../../rtl/ctl
+
+SEQ_SRC  ?= $(CTL_DIR)/dcmac_ctl_seq.sv
+SAMPLE_SRC ?= $(CTL_DIR)/dcmac_link_sample.sv
+WDT_SRC  ?= $(CTL_DIR)/wdt.sv
+SYNC_SRC ?= $(CTL_DIR)/../dcmac_sync2.sv
+EXEC_SRC ?= $(CTL_DIR)/dcmac_axil_exec.sv
+SHIM_SRC ?= $(CTL_DIR)/dcmac_axil_arb.sv
+FSM_SRC  ?= $(CTL_DIR)/dcmac_mac_ctl_fsm.sv
+CTL_SRC  ?= $(CTL_DIR)/dcmac_link_ctl.sv
+
+VERILOG_SOURCES := \
+  $(CTL_DIR)/dcmac_ctl_pkg.sv \
+  $(SEQ_SRC) \
+  $(SAMPLE_SRC) \
+  $(WDT_SRC) \
+  $(SYNC_SRC) \
+  $(EXEC_SRC) \
+  $(SHIM_SRC) \
+  $(FSM_SRC) \
+  $(CTL_SRC)
+
+TOPLEVEL := dcmac_link_ctl
+MODULE   := test_dcmac_link_ctl
+
+export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
+
+N_GROUP  ?= 2
+NPORTS   ?= 1
+ANCHOR   ?= 0
+ANCHOR_1 ?= 1
+export N_GROUP NPORTS ANCHOR ANCHOR_1
+
+CYC_PER_MS     ?= 20
+LINK_WDT_MS    ?= 20
+LINK_CONFIRM_N ?= 2
+ESC_MAX_STAGE  ?= 3
+T_RXDP_MS      ?= 5
+T_SETTLE_MS    ?= 2
+T_ERR_MS       ?= 2
+T_SAMPLE_MS    ?= 2
+SEG_CYC_PER_MS ?= 20
+T_SERDES_MS    ?= 2
+POLL_TRIES     ?= 3
+DONE_MASK      ?= 3
+export T_SAMPLE_MS CYC_PER_MS LINK_WDT_MS LINK_CONFIRM_N ESC_MAX_STAGE T_RXDP_MS DONE_MASK
+export SEG_CYC_PER_MS T_SERDES_MS
+
+SEED ?=
+ifneq ($(SEED),)
+    export RANDOM_SEED        := $(SEED)
+    export COCOTB_RANDOM_SEED := $(SEED)
+endif
+
+ifeq ($(SIM),verilator)
+    EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
+                  -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-SELRANGE \
+                  -Wno-DECLFILENAME
+    COMPILE_ARGS += -GN_GROUP=$(N_GROUP) -GNPORTS=$(NPORTS) -GANCHOR=$(ANCHOR) \
+                    -GANCHOR_1=$(ANCHOR_1) -GCYC_PER_MS=$(CYC_PER_MS) \
+                    -GLINK_WDT_MS=$(LINK_WDT_MS) -GLINK_CONFIRM_N=$(LINK_CONFIRM_N) \
+                    -GESC_MAX_STAGE=$(ESC_MAX_STAGE) -GT_RXDP_MS=$(T_RXDP_MS) \
+                    -GT_SETTLE_MS=$(T_SETTLE_MS) -GT_ERR_MS=$(T_ERR_MS) \
+                    -GT_SAMPLE_MS=$(T_SAMPLE_MS) \
+                    -GSEG_CYC_PER_MS=$(SEG_CYC_PER_MS) -GT_SERDES_MS=$(T_SERDES_MS)
+    COMPILE_ARGS += -GPOLL_TRIES=$(POLL_TRIES) -GDONE_MASK=$(DONE_MASK)
+endif
+
+COCOTB_HDL_TIMEUNIT      ?= 1ns
+COCOTB_HDL_TIMEPRECISION ?= 1ps
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+
+.PHONY: single rxonly stage2 confirm1 wide lint
+single:
+	$(MAKE) -f $(THIS_MK) N_GROUP=1
+
+rxonly:
+	$(MAKE) -f $(THIS_MK) ESC_MAX_STAGE=1
+
+stage2:
+	$(MAKE) -f $(THIS_MK) ESC_MAX_STAGE=2
+
+confirm1:
+	$(MAKE) -f $(THIS_MK) LINK_CONFIRM_N=1
+
+wide:
+	$(MAKE) -f $(THIS_MK) NPORTS=2 ANCHOR_1=2
+
+lint:
+	verilator --lint-only -sv --timing -Wall -Wno-DECLFILENAME -Wno-VARHIDDEN \
+	  -Wno-UNUSEDSIGNAL -Wno-SYNCASYNCNET -Wno-ASCRANGE \
+	  -Wno-PINCONNECTEMPTY -Wno-UNUSEDPARAM -Wno-CMPCONST \
+	  -GN_GROUP=$(N_GROUP) -GNPORTS=$(NPORTS) -GANCHOR_1=$(ANCHOR_1) \
+	  --top-module dcmac_link_ctl $(VERILOG_SOURCES)

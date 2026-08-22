@@ -1,0 +1,574 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# File        : nia-eth
+# Description : The flow driver behind every make target: help, deps, check, list, elab,
+#               sim, image, targets, hwtest and clean. A simulation set is scored from the
+#               result file the set writes rather than from an exit status.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Bash
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+set -u
+
+ROOT="$(d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; until [ -f "$d/.nia-repo-root" ]; do [ "$d" = / ] && exit 1; d="$(dirname "$d")"; done; printf '%s' "$d")"
+[ -n "$ROOT" ] || { echo "nia-eth: cannot find .nia-repo-root above this script" >&2; exit 1; }
+cd "$ROOT"
+
+fail=0
+pending=0
+note() { printf '  %-52s %s\n' "$1" "$2"; }
+bad()  { note "$1" "$2"; fail=$((fail + 1)); }
+
+cmd_help() {
+	cat <<EOF
+nia-eth 0.1.0
+
+  make help              this text
+  make deps              report every submodule this repository consumes
+  make check             hardware free: layout, scripts, source lists, submodules
+  make sim               every licence-free simulation set (needs verilator and cocotb)
+  make hwtest            how to run the board tests, which need a board and so are scripts
+  make list              every simulation entry point
+  make elab              elaborate every simulation set, no simulator run
+  make image             build the self-contained test image (needs Vivado)
+  make targets           the release targets this repository supports
+  make clean             remove simulation and build output
+
+Elaboration:
+  NIA_VERILATOR      the verilator executable, default verilator
+
+Image:
+  Source the settings64.sh of a Vivado install that carries the part and run
+  make image. It generates the DCMAC IP and the host bridge block design if that
+  has not been done, then synthesises, implements, writes the device image, and
+  reports every gate read from the log. A second run reuses both.
+
+  NIA_PART           the part, default xcvp1552-vsva2785-2MHP-i-S
+  NIA_RATE           the client rate: 100 (default, the proven dual 100GAUI-1
+                     build), 200 for two 200GAUI-2 clients, or 400 for one
+                     400GAUI-4 client on QSFP0. It selects the DCMAC port
+                     pattern and the transceiver wizard XCIs in build_ip.tcl,
+                     and the device top, the PHY source file, the timing
+                     constraints and the transceiver placement in
+                     build_image.tcl. The log proves the choice: IP RATE and
+                     IMAGE RATE, plus IMAGE PHY naming the one file that
+                     defines module dcmac_phy
+  NIA_XDC            the timing constraints, default the TU03 set under
+                     example/TU03/fpga/constraints
+  NIA_XDC_PHYS       the post synthesis placement and waivers, default the TU03
+                     set; 'none' runs without it and leaves the transceiver
+                     placement to the tool
+  NIA_WINDOW         the base address of the register window the host reaches
+                     over JTAG, default 0xA4000000
+  NIA_OUT            the output directory, default build/image
+  NIA_IP_DIR         where the generated IP and block design land, default
+                     build/ip
+  NIA_IP_SRC         where the DCMAC example design .xci pair is read from,
+                     default ip/
+  NIA_IP_FORCE=1     generate the IP and the block design again even if
+                     build/ip already carries them
+  NIA_OOC=1          synthesise the traffic instrument out of context: the top
+                     is fpga_pktgen_top, there is no host bridge and no pin
+                     assignment, so the run stops at the routed checkpoint and
+                     writes no device image. The default is 0, which builds
+                     tu03_pktgen_board_top for the board
+  NIA_IMAGE_WRITE    write a device image, default 1 unless NIA_OOC=1
+  NIA_LOOPBACK       the transceiver loopback code the image is built with,
+                     default 0, which is the wire. 1 is near end PCS loopback,
+                     which lets the traffic source and the checker meet with no
+                     cable and no partner
+  NIA_VIVADO_BIN     the tool executable, default vivado
+  Writing a device image needs a DCMAC licence; synthesis and implementation
+  do not.
+
+Simulation:
+  NIA_SIM_MATCH      run only the sets whose entry point path contains this text
+  NIA_SIM_ARGS       arguments passed to each set, for example SIM=icarus or SEED=2
+  A set needs cocotb and either verilator 4.106 or newer, or icarus 10.3 or newer.
+  Every set of this repository declares its own simulator; SIM=... overrides it.
+
+Environment:
+  NIA_ETH, NIA_PCIE, NIA_CORUNDUM, NIA_TAXI, NIA_DPDK
+      Override where a consumed repository is found. Each defaults to its
+      submodule path, so an initialised clone needs no environment at all.
+EOF
+}
+
+cmd_deps() {
+	if [ ! -f .gitmodules ]; then
+		note "submodules" "none: this repository consumes no other"
+		return 0
+	fi
+	local path url root
+	while read -r key eq val; do
+		case "$key" in
+		path) path="$val" ;;
+		url)  url="$val"
+		      root="$(mount_root "$path")"
+		      if [ -n "$root" ]; then
+			      note "$path" "present${root:+ at $root}"
+		      else
+			      note "$path" "PENDING - git submodule update --init $path   ($url)"
+			      pending=$((pending + 1))
+		      fi ;;
+		esac
+	done < <(sed -n 's/^\t*\(path\|url\) *\(=\) *\(.*\)$/\1 \2 \3/p' .gitmodules)
+	return 0
+}
+
+cmd_list() {
+	find . -path ./.git -prune -o -name 'mut_work' -prune -o -name 'sim_build*' -prune -o -name 'obj_dir' -prune -o \( -name 'Makefile' -o -name 'Makefile.*' \) -print \
+	  | grep -v '^\./Makefile$' | grep -vE "$NIA_MOUNT_FILTER" | sort | sed 's|^\./||' | sed 's|^|  |'
+}
+
+NIA_MOUNT_FILTER='^\./(eth|pcie|dpdk|nic-core)/'
+
+mount_root() {
+	local m="$1" var sib
+	case "$m" in
+	eth)              var="${NIA_ETH:-}" ;;
+	pcie)             var="${NIA_PCIE:-}" ;;
+	dpdk)             var="${NIA_DPDK:-}" ;;
+	nic-core/corundum) var="${NIA_CORUNDUM:-}" ;;
+	nic-core/taxi)    var="${NIA_TAXI:-}" ;;
+	*) var="" ;;
+	esac
+	if [ -n "$var" ] && [ -d "$var" ]; then printf '%s' "$var"; return 0; fi
+	if [ -n "$(ls -A "$m" 2>/dev/null | grep -v '^\.gitkeep$')" ]; then printf '%s' "$m"; return 0; fi
+	case "$m" in
+	pcie) sib="../nia-pcie" ;;
+	dpdk) sib="../nia-dpdk-pmd" ;;
+	*)    sib="" ;;
+	esac
+	[ -n "$sib" ] && [ -d "$sib" ] && { printf '%s' "$sib"; return 0; }
+	printf ''
+}
+
+resolve_source() {
+	local s="$1" rel m root tail
+	[ -f "$s" ] && return 0
+	rel="$(realpath -m --relative-to="$ROOT" "$s" 2>/dev/null || printf '%s' "${s#$ROOT/}")"
+	[ -f "$ROOT/$rel" ] && return 0
+	for m in eth pcie dpdk nic-core/corundum nic-core/taxi; do
+		case "$rel" in
+		"$m"/*)
+			tail="${rel#$m/}"
+			root="$(mount_root "$m")"
+			[ -z "$root" ] && return 1
+			[ -f "$root/$tail" ] && return 0
+			return 2 ;;
+		esac
+	done
+	return 2
+}
+
+cmd_own_check() {
+	local srcs out rc
+	srcs="$(find rtl ip synth -name '*.f' -o -name '*.tcl' 2>/dev/null | sort)"
+	if [ -z "$srcs" ]; then
+		note "file lists and build scripts" "none"
+		return 0
+	fi
+	out="$(python3 lib/check_sources.py "$ROOT" $srcs 2>&1)"
+	rc=$?
+	printf '%s\n' "$out" | grep -v '^NIA_TCL' | grep -q . && printf '%s\n' "$out" | grep -v '^NIA_TCL'
+	note "file list and build script sources" "$(printf '%s\n' "$out" | sed -n 's/^NIA_TCL //p')"
+	[ "$rc" != 0 ] && fail=$((fail + rc))
+	return 0
+}
+
+cmd_check() {
+	echo "nia-eth: structural check"
+	[ -f VERSION ] || bad "VERSION" "missing"
+	[ -f LICENSE ] || bad "LICENSE" "missing"
+	[ -f .nia-repo-root ] || bad ".nia-repo-root" "missing"
+
+	local nsh=0 npy=0
+	while IFS= read -r f; do
+		nsh=$((nsh + 1))
+		bash -n "$f" 2>/dev/null || bad "$f" "shell syntax error"
+	done < <(find . -name '*.sh' -not -path './.git/*' | grep -vE "$NIA_MOUNT_FILTER")
+	note "shell scripts parsed" "$nsh"
+
+	while IFS= read -r f; do
+		npy=$((npy + 1))
+		python3 -m py_compile "$f" 2>/dev/null || bad "$f" "python syntax error"
+	done < <(find . -name '*.py' -not -path './.git/*' | grep -vE "$NIA_MOUNT_FILTER")
+	note "python files compiled" "$npy"
+	local n=$((nsh + npy))
+
+	local mk d total=0 missing=0 pend=0 s rc nmk=0 err out
+	err="$(mktemp)"
+	export PATH="$ROOT/lib/cocotb-stub:$PATH"
+	while IFS= read -r mk; do
+		grep -qE '^[ \t]*(VERILOG_SOURCES|SRC|SRCS)[ \t]*(\+?=|:=)' "$mk" || continue
+		nmk=$((nmk + 1))
+		d="$(dirname "$mk")"
+		out="$( cd "$d" && make -s --no-print-directory -f "$(basename "$mk")" \
+		        APP_DIR="$ROOT" APP="$ROOT" REPO="$ROOT" ROOT="$ROOT" NIA_ROOT="$ROOT" \
+		        --eval='nia_p:
+	@printf "%s\n" $(VERILOG_SOURCES) $(SRC) $(SRCS)' nia_p 2>"$err" )"
+		rc=$?
+		if [ "$rc" != 0 ]; then
+			if grep -qE 'No such file|not found|Nothing to be done' "$err"; then
+				note "$mk" "not expanded here: $(head -n 1 "$err" | cut -c1-60)"
+			else
+				note "$mk" "declines to expand: $(grep -m1 -oE '\*\*\*.*' "$err" | cut -c1-70)"
+			fi
+		fi
+		for s in $out; do
+			case "$s" in
+			*.sv|*.v|*.c|*.h) ;;
+			*) continue ;;
+			esac
+			case "$s" in /*) ;; *) s="$d/$s" ;; esac
+			total=$((total + 1))
+			resolve_source "$s"; rc=$?
+			if [ "$rc" = 1 ]; then
+				pend=$((pend + 1))
+			elif [ "$rc" = 2 ]; then
+				missing=$((missing + 1)); bad "$mk" "source missing: $s"
+			fi
+		done
+	done < <(find . -path ./.git -prune -o -name 'mut_work' -prune -o -name 'sim_build*' -prune -o -name 'obj_dir' -prune -o \( -name 'Makefile' -o -name 'Makefile.*' \) -print \
+	         | grep -v '^\./Makefile$' | grep -vE "$NIA_MOUNT_FILTER")
+	rm -f "$err"
+	note "simulation sources" "$total checked, $missing missing, $pend awaiting a submodule"
+
+	if [ "$nmk" -gt 0 ] && [ "$total" -eq 0 ]; then
+		bad "source lists" \
+		    "$nmk entry point(s) declare a source list but none resolved: nothing was verified"
+	fi
+	if [ "$total" -eq 0 ] && [ "$n" -eq 0 ]; then
+		bad "this check" "it verified nothing: no source list, no script, no python file"
+	fi
+	cmd_own_check
+	cmd_deps
+	cmd_targets
+
+	if [ "$fail" -eq 0 ]; then
+		if [ "$pending" -gt 0 ]; then
+			echo "nia-eth: CHECK PASS  ($pending submodule(s) not yet initialised)"
+		else
+			echo "nia-eth: CHECK PASS"
+		fi
+	else
+		echo "nia-eth: CHECK FAIL, $fail problem(s)"
+	fi
+	return "$fail"
+}
+
+cmd_hwtest() {
+	local hw="example/TU03/hw" two="example/TU03/hw_twoboard"
+	echo "nia-eth: the hardware tests need a board, so they are scripts rather than a make target."
+	echo
+	echo "One board, one cage:"
+	echo "  cd $hw && ./program.sh check"
+	echo "  cd $hw && NIA_TARGET=<cable serial> PDI=<image> ./program.sh program"
+	echo
+	echo "Two boards, cage to the same cage over two DACs:"
+	echo "  cd $two && ./program_twoboard.sh list"
+	echo "  cd $two && SERIAL_A=<serial> SERIAL_B=<serial> ./sweep_twoboard.sh <image>"
+	echo
+	echo "The sweep programs both boards, brings the links up and sweeps every frame length."
+	echo "README.md section 'The full length sweep' carries the options and what each gate means."
+	return 0
+}
+
+cmd_sim() {
+	local mk d rc=0 pass=0 bad=0 xfail=0 name mrc xml nf tag
+	command -v cocotb-config >/dev/null || { echo "sim: cocotb is not installed"; return 1; }
+	command -v verilator >/dev/null || command -v iverilog >/dev/null || {
+		echo "sim: no simulator: install verilator 4.106 or newer, or icarus 10.3 or newer"
+		return 1
+	}
+	if command -v verilator >/dev/null; then
+		local vlver vlmin vloldest
+		vlver="$(verilator --version 2>/dev/null | awk '{print $2}')"
+		vlmin=4.106
+		vloldest="$(printf '%s\n%s\n' "$vlmin" "$vlver" | sort -V | head -1)"
+		if [ "$vloldest" != "$vlmin" ]; then
+			echo "sim: verilator is $vlver at $(command -v verilator), and cocotb requires $vlmin or newer."
+			echo "     Every set of this repository declares SIM=verilator, so all of them would fail with"
+			echo "     the same message from cocotb. Put a newer verilator first on PATH, for example"
+			echo "     PATH=\$HOME/local/bin:\$PATH make sim, or run one set under icarus with"
+			echo "     NIA_SIM_ARGS=\"SIM=icarus\" if that set's sources are Verilog."
+			return 1
+		fi
+	fi
+	while IFS= read -r mk; do
+		grep -qE '^[ \t]*(VERILOG_SOURCES|VHDL_SOURCES)[ \t]*(\+?=|:=)' "$mk" || continue
+		d="$(dirname "$mk")"
+		name="$(printf '%s' "${mk#./}")"
+		[ -n "${NIA_SIM_MATCH:-}" ] && case "$name" in *"$NIA_SIM_MATCH"*) ;; *) continue ;; esac
+		echo "== $name"
+		tag="$(printf '%s' "$name" | tr '/.' '__')"
+		rm -f "$d/results_$tag.xml"
+		if ( cd "$d" && make -f "$(basename "$mk")" \
+		       SIM_BUILD="sim_build_$tag" COCOTB_RESULTS_FILE="results_$tag.xml" \
+		       ${NIA_SIM_ARGS:-} ); then
+			mrc=0
+		else
+			mrc=1
+		fi
+		xml=""
+		[ -f "$d/results_$tag.xml" ] && xml="$d/results_$tag.xml"
+		nf=0
+		if [ -n "$xml" ]; then
+			nf=$(( $(grep -o '<failure' "$xml" 2>/dev/null | wc -l) \
+			     + $(grep -o '<error' "$xml" 2>/dev/null | wc -l) ))
+		fi
+		if grep -qE '^NIA_EXPECT[ \t]*:?=[ \t]*fail-build' "$mk"; then
+			if [ "$mrc" != 0 ] && [ "$nf" -eq 0 ]; then
+				xfail=$((xfail + 1))
+				echo "-- $name failed to build as declared (make status $mrc)"
+			else
+				bad=$((bad + 1)); rc=1
+				echo "^^ $name declares NIA_EXPECT := fail-build and built: make status $mrc, $nf failing test(s)"
+			fi
+		elif grep -qE '^NIA_EXPECT[ \t]*:?=[ \t]*fail' "$mk"; then
+			if [ "$nf" -gt 0 ]; then
+				xfail=$((xfail + 1))
+				echo "-- $name failed as declared ($nf failing test(s))"
+			elif [ "$mrc" != 0 ]; then
+				bad=$((bad + 1)); rc=1
+				echo "^^ $name declares NIA_EXPECT := fail and never ran: make status $mrc with 0 failing test(s), so the control is vacuous rather than satisfied. Declare NIA_EXPECT := fail-build if failing to build is the intended result"
+			else
+				bad=$((bad + 1)); rc=1
+				echo "^^ $name PASSED but declares NIA_EXPECT := fail; the declaration is stale"
+			fi
+		elif [ "$mrc" = 0 ] && [ -n "$xml" ] && [ "$nf" -eq 0 ]; then
+			pass=$((pass + 1))
+		else
+			bad=$((bad + 1)); rc=1
+			if [ -z "$xml" ]; then
+				echo "^^ $name FAILED: no result file was written"
+			else
+				echo "^^ $name FAILED: $nf failing test(s), make status $mrc"
+			fi
+		fi
+	done < <(find . -path ./.git -prune -o -path ./lib/cocotb-stub -prune -o \
+	         -name 'mut_work' -prune -o -name 'sim_build*' -prune -o -name 'obj_dir' -prune -o \( -name 'Makefile' -o -name 'Makefile.*' \) -print \
+	         | grep -v '^\./Makefile$' | grep -vE "$NIA_MOUNT_FILTER" | sort)
+	if [ "$pass" -eq 0 ] && [ "$bad" -eq 0 ]; then
+		echo "nia-eth: no simulation set was run, so nothing was verified"
+		return 1
+	fi
+	echo "nia-eth: simulation sets: $pass passed, $bad failed, $xfail failed as declared"
+	return "$rc"
+}
+
+cmd_targets() {
+	if [ ! -f DPDK_TARGET ]; then
+		note "targets" "this repository declares no release targets"
+		return 0
+	fi
+	grep -vE '^#' DPDK_TARGET | grep -vE '^[[:space:]]*$' | while read -r rel status how; do
+		note "$rel" "$status: $how"
+	done
+	local guarded
+	guarded=$(grep -rlE '__has_include|RTE_VERSION_NUM' base pmd 2>/dev/null | wc -l)
+	note "guarded sites" "$guarded file(s) carry a release guard"
+	local unnamed=0 f
+	for f in $(grep -rlE '__has_include|RTE_VERSION_NUM' base pmd 2>/dev/null); do
+		grep -qE '2[0-9]\.[0-9]{2}' "$f" || { unnamed=$((unnamed + 1)); bad "$f" "a release guard that names no release"; }
+	done
+	[ "$unnamed" = 0 ] && note "every guard names a release" "yes"
+	return 0
+}
+
+cmd_clean() {
+	find . -name 'sim_build*' -type d -prune -exec rm -rf {} + 2>/dev/null
+	find . -name 'mut_work' -type d -prune -exec rm -rf {} + 2>/dev/null
+	find . -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null
+	find . -name 'obj_dir' -type d -prune -exec rm -rf {} + 2>/dev/null
+	find . -name 'results*.xml' -delete 2>/dev/null
+	find . -name '*.vcd' -delete 2>/dev/null
+	find . -name '*.fst' -delete 2>/dev/null
+	find . -name '*.fst.hier' -delete 2>/dev/null
+	rm -rf build .Xil 2>/dev/null
+	rm -f vivado*.log vivado*.jou vivado*.str hs_err_pid*.log 2>/dev/null
+	echo "nia-eth: cleaned"
+}
+
+cmd_elab() {
+	python3 sim/gate/gate_elaborate_sets.py .
+}
+
+nonneg() {
+	local what="$1" v="$2"
+	if [ -z "$v" ]; then bad "$what" "not reported"; return; fi
+	if awk -v x="$v" 'BEGIN{exit !(x+0 >= 0)}'; then note "$what" "$v"; else bad "$what" "$v"; fi
+}
+
+manifest_paths_exist() {
+	local mf="$1" line n=0
+	[ -s "$mf" ] || return 1
+	while IFS= read -r line; do
+		[ -n "$line" ] || continue
+		[ -f "$line" ] || return 1
+		n=$((n + 1))
+	done < "$mf"
+	[ "$n" -gt 0 ]
+}
+
+cmd_image() {
+	local bin="${NIA_VIVADO_BIN:-vivado}"
+	local ip_tcl="example/TU03/fpga/build_ip.tcl"
+	local tcl="example/TU03/fpga/build_image.tcl"
+	[ -f "$ip_tcl" ] || { echo "image: $ip_tcl is missing"; return 1; }
+	[ -f "$tcl" ] || { echo "image: $tcl is missing"; return 1; }
+	if ! command -v "$bin" >/dev/null; then
+		echo "image: '$bin' is not on the path."
+		echo "       Source the settings64.sh of a Vivado install that carries this part, or"
+		echo "       set NIA_VIVADO_BIN to the executable name. A Lab Edition install can"
+		echo "       program a board but cannot build an image."
+		return 1
+	fi
+	local out="${NIA_OUT:-build/image}"
+	local ip_dir="${NIA_IP_DIR:-$ROOT/build/ip}"
+	export NIA_IP_DIR="$ip_dir"
+	mkdir -p "$out" "$ip_dir"
+	note "tool" "$("$bin" -version 2>/dev/null | head -1)"
+	note "part" "${NIA_PART:-xcvp1552-vsva2785-2MHP-i-S}"
+	note "register window" "${NIA_WINDOW:-0xA4000000}"
+	note "output" "$out"
+
+	local ip_manifest="$ip_dir/ip_manifest.txt"
+	local bd_manifest="$ip_dir/bd/bd_manifest.txt"
+	local ip_config="$ip_dir/ip_config.txt"
+	local ip_request="NIA_RATE=${NIA_RATE:-} NIA_CLIENTS=${NIA_CLIENTS:-} NIA_PKTGEN=${NIA_PKTGEN:-} NIA_PART=${NIA_PART:-}"
+	local ip_log="$ip_dir/ip_build.log" iprc=0
+	local ip_config_changed=0
+	[ "$(cat "$ip_config" 2>/dev/null)" != "$ip_request" ] && ip_config_changed=1
+	if [ "${NIA_IP_FORCE:-0}" = 1 ] || ! manifest_paths_exist "$ip_manifest" \
+	   || ! manifest_paths_exist "$bd_manifest" || [ "$ip_config_changed" = 1 ]; then
+		echo "nia-eth: generating the host bridge block design and the DCMAC IP; this takes several minutes"
+		if [ "$ip_config_changed" = 1 ] && [ -e "$ip_config" ]; then
+			echo "nia-eth: the IP configuration changed, so $ip_dir is regenerated from empty"
+			rm -rf "$ip_dir"
+			mkdir -p "$ip_dir"
+		fi
+		rm -f "$ip_manifest" "$bd_manifest" "$ip_config"
+		"$bin" -mode batch -nojournal -notrace -source "$ip_tcl" >"$ip_log" 2>&1
+		iprc=$?
+		if ! manifest_paths_exist "$bd_manifest"; then
+			grep -E '^(IP|BRIDGE) FAIL' "$ip_log" 2>/dev/null | head -3 | sed 's/^/  /'
+			bad "the host bridge block design" "not generated, see ${ip_log#"$ROOT"/} (tool status $iprc)"
+			echo "nia-eth: IMAGE FAIL, $fail gate(s) not met"
+			return "$fail"
+		fi
+		if ! manifest_paths_exist "$ip_manifest"; then
+			grep -E '^IP (FAIL|SRC)' "$ip_log" 2>/dev/null | head -3 | sed 's/^/  /'
+			bad "the DCMAC IP" "not generated, see ${ip_log#"$ROOT"/} (tool status $iprc)"
+			echo "nia-eth: IMAGE FAIL, $fail gate(s) not met"
+			return "$fail"
+		fi
+		note "host bridge block design" "$(sed -n 1p "$bd_manifest")"
+		note "DCMAC IP generated" "$(grep -c . "$ip_manifest") .xci"
+	else
+		note "host bridge block design reused" "$(sed -n 1p "$bd_manifest")"
+		note "DCMAC IP reused" "$(grep -c . "$ip_manifest") .xci from an earlier run"
+	fi
+
+	local log="$out/image_build.log" rc
+	echo "nia-eth: building the device image; this takes tens of minutes"
+	"$bin" -mode batch -nojournal -notrace -source "$tcl" 2>&1 | tee "$log"
+	rc="${PIPESTATUS[0]}"
+
+	echo
+	echo "nia-eth: image build gates, read from the log rather than the exit status"
+	local wns whs nfail noclk mode top pdi dcp refused
+	wns="$(sed -n 's/^IMAGE WNS //p' "$log" | head -1)"
+	whs="$(sed -n 's/^IMAGE WHS //p' "$log" | head -1)"
+	nfail="$(sed -n 's/^IMAGE FAILING_PATHS //p' "$log" | head -1)"
+	noclk="$(sed -n 's/^IMAGE NOCLK //p' "$log" | head -1)"
+	mode="$(sed -n 's/^IMAGE MODE //p' "$log" | head -1)"
+	top="$(sed -n 's/^IMAGE TOP //p' "$log" | head -1)"
+	dcp="$(sed -n 's/^IMAGE CHECKPOINT //p' "$log" | head -1)"
+	pdi="$(sed -n 's/^IMAGE WRITTEN //p' "$log" | head -1)"
+	refused="$(sed -n 's/^IMAGE PDI REFUSED //p' "$log" | head -1)"
+
+	sed -n 's/^IMAGE FAIL: /  refused: /p' "$log" | head -5
+	note "top" "${top:-not reported}"
+	grep -q '^IMAGE STAGE synth done' "$log" && note "synthesis" "done" \
+		|| bad "synthesis" "did not finish"
+	if [ -n "$dcp" ] && [ -f "$dcp" ]; then
+		note "routed checkpoint" "${dcp#"$ROOT"/} ($(stat -c %s "$dcp") B)"
+	else
+		bad "routed checkpoint" "${dcp:-none written}"
+	fi
+	nonneg "setup slack (WNS)" "$wns"
+	nonneg "hold slack (WHS)" "$whs"
+	[ "${nfail:-x}" = 0 ] && note "failing timing paths" "0" \
+		|| bad "failing timing paths" "${nfail:-not reported}"
+	[ "${noclk:-x}" = 0 ] && note "unconstrained clocks" "0" \
+		|| bad "unconstrained clocks" "${noclk:-not reported}"
+	note "synthesis mode" "${mode:-not reported}"
+
+	local skipped=0 unlicensed=0 why=""
+	why="$(sed -n 's/^IMAGE PDI SKIPPED //p' "$log" | head -1)"
+	if [ -n "$pdi" ]; then
+		if [ -f "$pdi" ]; then
+			note "image" "${pdi#"$ROOT"/} ($(stat -c %s "$pdi") B)"
+		else
+			bad "image" "the log names $pdi but it is absent"
+		fi
+	elif [ -n "$refused" ]; then
+		case "$refused" in
+		*17-69*|*icens*|*"Design Linking"*|*"Design_Linking"*)
+			note "image" "not written: this install has no DCMAC licence"
+			note "the refusal" "$(printf '%s' "$refused" | tr '\n' ' ' | cut -c1-96)"
+			unlicensed=1 ;;
+		*)
+			bad "image" "$(printf '%s' "$refused" | tr '\n' ' ' | cut -c1-70)" ;;
+		esac
+	elif [ -n "$why" ]; then
+		note "image" "not written: $why"
+		skipped=1
+	else
+		bad "image" "write_device_image produced none"
+	fi
+
+	grep -q '^IMAGE DONE rc=0' "$log" && note "script reached its end" "rc=0" \
+		|| bad "script reached its end" "$(grep -m1 '^IMAGE DONE' "$log" 2>/dev/null || echo 'no end marker')"
+	note "critical warnings" "$(grep -c '^CRITICAL WARNING' "$log")"
+	[ "$rc" = 0 ] || note "tool exit status" "$rc (the gates above decide, not this)"
+
+	if [ "$fail" -ne 0 ]; then
+		echo "nia-eth: IMAGE FAIL, $fail gate(s) not met, see ${log#"$ROOT"/}"
+		return "$fail"
+	fi
+	if [ "$unlicensed" = 1 ]; then
+		echo "nia-eth: IMAGE STOPPED at write_device_image, and only there: the design"
+		echo "         synthesised, implemented and closed timing, and this install has no"
+		echo "         DCMAC licence. Run the same command on a licensed machine to get the"
+		echo "         image; a checkpoint routed here cannot be turned into one elsewhere,"
+		echo "         because the licence state is baked into the generated IP."
+		return 3
+	fi
+	if [ "$skipped" = 1 ]; then
+		echo "nia-eth: IMAGE PASS, no device image written: $why"
+		return 0
+	fi
+	echo "nia-eth: IMAGE PASS"
+	return 0
+}
+
+case "${1:-help}" in
+help)  cmd_help ;;
+deps)  cmd_deps; exit "$fail" ;;
+check) cmd_check ;;
+sim)   cmd_sim ;;
+elab)  cmd_elab ;;
+image) cmd_image; exit $? ;;
+list)  cmd_list ;;
+targets) cmd_targets; exit "$fail" ;;
+hwtest) cmd_hwtest ;;
+clean) cmd_clean ;;
+*) echo "nia-eth: unknown target '$1'" >&2; cmd_help; exit 2 ;;
+esac

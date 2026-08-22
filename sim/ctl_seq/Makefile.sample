@@ -1,0 +1,84 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.sample
+# Description : The cocotb set for the read only link status sampler.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+TOPLEVEL_LANG ?= verilog
+SIM           ?= verilator
+
+HERE    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+THIS_MK := $(lastword $(MAKEFILE_LIST))
+RTL_DIR := $(HERE)/../../rtl/ctl
+
+SMP_SRC ?= $(RTL_DIR)/dcmac_link_sample.sv
+
+VERILOG_SOURCES := $(SMP_SRC) $(RTL_DIR)/wdt.sv
+
+TOPLEVEL := dcmac_link_sample
+MODULE   := test_dcmac_link_sample
+
+export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
+
+export CYC_PER_US   ?= 4
+export CYC_PER_MS   ?= 4
+export T_SAMPLE_MS  ?= 5
+export T_ERR_MS     ?= 10
+export LINK_WDT_MS  ?= 2000
+export N_BUS_ERR    ?= 4
+export NIA_EXEC_LAT ?= 3
+
+A_ALIGN    ?= 3076
+A_FAULT    ?= 324
+ALIGN_MASK ?= 5
+
+SEED ?=
+ifneq ($(SEED),)
+    export RANDOM_SEED        := $(SEED)
+    export COCOTB_RANDOM_SEED := $(SEED)
+endif
+
+ifeq ($(SIM),verilator)
+    EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
+                  -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-SELRANGE
+    COMPILE_ARGS += -GCYC_PER_US=$(CYC_PER_US) \
+                    -GCYC_PER_MS=$(CYC_PER_MS) \
+                    -GT_SAMPLE_MS=$(T_SAMPLE_MS) \
+                    -GT_ERR_MS=$(T_ERR_MS) \
+                    -GLINK_WDT_MS=$(LINK_WDT_MS) \
+                    -GLINK_WDT_MS_MIN=1 \
+                    -GLINK_WDT_MS_MAX=60000 \
+                    -GN_BUS_ERR=$(N_BUS_ERR) \
+                    -GA_ALIGN_ADDR=$(A_ALIGN) \
+                    -GA_FAULT_ADDR=$(A_FAULT) \
+                    -GALIGN_MASK=$(ALIGN_MASK)
+endif
+
+COCOTB_HDL_TIMEUNIT      ?= 1ns
+COCOTB_HDL_TIMEPRECISION ?= 1ps
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+
+.PHONY: slowbus buserr1 lint
+slowbus:
+	$(MAKE) -f $(THIS_MK) NIA_EXEC_LAT=61
+
+slowbus1:
+	$(MAKE) -f $(THIS_MK) NIA_EXEC_LAT=61 \
+	  SIM_BUILD=sim_build_slowbus1 \
+	  TESTCASE=test_ns63_publishes_the_fault_nibble_from_rdata
+
+buserr1:
+	$(MAKE) -f $(THIS_MK) N_BUS_ERR=1
+
+lint:
+	verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-VARHIDDEN \
+	  -GCYC_PER_US=$(CYC_PER_US) -GCYC_PER_MS=$(CYC_PER_MS) \
+	  -GT_SAMPLE_MS=$(T_SAMPLE_MS) -GLINK_WDT_MS=$(LINK_WDT_MS) \
+	  -GA_ALIGN_ADDR=$(A_ALIGN) -GA_FAULT_ADDR=$(A_FAULT) -GALIGN_MASK=$(ALIGN_MASK) \
+	  --top-module $(TOPLEVEL) $(SMP_SRC) $(RTL_DIR)/wdt.sv

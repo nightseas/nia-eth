@@ -1,0 +1,119 @@
+--- a/dcmac_seg_pktgen_chain.sv	2026-08-15 13:55:16.994711328 +0800
++++ b/dcmac_seg_pktgen_chain.sv	2026-08-15 13:38:15.763138303 +0800
+@@ -1236,6 +1236,8 @@
+   i_skip_response,
+   i_pkt,
+   i_tready,
++  i_hdr_ena,
++  i_hdr_bytes,
+   o_af,
+   o_vld,
+   o_preamble,
+@@ -1246,6 +1248,10 @@
+
+   parameter REGISTER_INPUT = 1;
+
++  localparam int HDR_B      = 42;
++  localparam int HDR_SEG_B  = 16;
++  localparam logic [1:0] HDR_NO_SEG = 2'd3;
++
+   parameter R_400G = 2'b10,
+             R_200G = 2'b01,
+             R_100G = 2'b00;
+@@ -1276,6 +1282,8 @@
+   input  axis_tx_pkt_t                i_pkt;
+   input                [5:0]          i_pkt_ena;
+   input                [5:0]          i_tready;
++  input                               i_hdr_ena;
++  input                [HDR_B*8-1:0]  i_hdr_bytes;
+   output slice_t       [5:0]          o_slice;
+   output               [5:0]          o_af;
+   output reg           [5:0][55:0]    o_preamble;
+@@ -1596,6 +1604,76 @@
+     rd_deep_fifo_ena <= dat_enough & shallow_ae;
+   end
+
++  localparam int HDR_OFF_IDLE = 48;
++
++  reg     [5:0][5:0]          hdr_offset;
++  reg     [5:0][1:0][1:0]     hdr_code;
++  slice_t [5:0]               fin_d;
++  reg     [5:0]               wr_ena_d;
++  slice_t [5:0]               fin_hdr;
++  reg     [5:0]               wr_ena_hdr;
++  logic   [5:0][1:0][1:0]     hdr_code_nxt;
++  logic   [5:0][5:0]          hdr_offset_nxt;
++  slice_t [5:0]               fin_hdr_nxt;
++
++  function automatic [1:0] hdr_code_of(input logic [5:0] offset);
++    case (offset)
++      6'd0:    hdr_code_of = 2'd0;
++      6'd16:   hdr_code_of = 2'd1;
++      6'd32:   hdr_code_of = 2'd2;
++      default: hdr_code_of = HDR_NO_SEG;
++    endcase
++  endfunction
++
++  function automatic [5:0] hdr_offset_step(input logic [5:0] offset);
++    hdr_offset_step = (offset >= 6'(HDR_OFF_IDLE - HDR_SEG_B)) ? 6'(HDR_OFF_IDLE)
++                                                              : offset + 6'(HDR_SEG_B);
++  endfunction
++
++  always @* begin
++    for (int z=0; z<6; z++) begin
++      logic [5:0] start_seg_0;
++      logic [5:0] start_seg_1;
++      start_seg_0 = (fin[z].sop[0] & fin[z].ena[0]) ? 6'd0 : hdr_offset[z];
++      start_seg_1 = (fin[z].sop[1] & fin[z].ena[1]) ? 6'd0 : hdr_offset_step(start_seg_0);
++      hdr_code_nxt[z][0] = i_hdr_ena ? hdr_code_of(start_seg_0) : HDR_NO_SEG;
++      hdr_code_nxt[z][1] = i_hdr_ena ? hdr_code_of(start_seg_1) : HDR_NO_SEG;
++      hdr_offset_nxt[z]  = hdr_offset_step(start_seg_1);
++    end
++  end
++
++  always_ff @(posedge clk) begin
++    fin_d    <= fin;
++    wr_ena_d <= wr_ena;
++    hdr_code <= hdr_code_nxt;
++    for (int z=0; z<6; z++) begin
++      if (rst_mask[z]) hdr_offset[z] <= 6'(HDR_OFF_IDLE);
++      else if (wr_ena[z]) hdr_offset[z] <= hdr_offset_nxt[z];
++    end
++  end
++
++  always @* begin
++    fin_hdr_nxt = fin_d;
++    for (int z=0; z<6; z++) begin
++      for (int s=0; s<2; s++) begin
++        for (int b=0; b<HDR_SEG_B; b++) begin
++          case (hdr_code[z][s])
++            2'd0: fin_hdr_nxt[z].dat[s][b*8 +: 8] = i_hdr_bytes[(b) * 8 +: 8];
++            2'd1: fin_hdr_nxt[z].dat[s][b*8 +: 8] = i_hdr_bytes[(HDR_SEG_B + b) * 8 +: 8];
++            2'd2: if (2 * HDR_SEG_B + b < HDR_B)
++                    fin_hdr_nxt[z].dat[s][b*8 +: 8] = i_hdr_bytes[(2 * HDR_SEG_B + b) * 8 +: 8];
++            default: ;
++          endcase
++        end
++      end
++    end
++  end
++
++  always_ff @(posedge clk) begin
++    fin_hdr    <= fin_hdr_nxt;
++    wr_ena_hdr <= wr_ena_d;
++  end
++
+   genvar z;
+   generate
+     for (z=0; z<6; z++) begin : GEN_FIFO
+@@ -1609,8 +1687,8 @@
+       deep_fifo_inst (
+          .clk        (clk),
+          .rst        (rst_mask[z]),
+-         .wr_en      (wr_ena[z]),
+-         .din        (fin[z]),
++         .wr_en      (wr_ena_hdr[z]),
++         .din        (fin_hdr[z]),
+          .rd_en      (rd_deep_fifo_ena[z]),
+          .data_valid (fout_vld[z]),
+          .dout       (fout_slice_flat[z]),

@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.link_wdt
+# Description : The cocotb set for the per group link watchdog.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_ctl_seq_link_wdt
+COCOTB_RESULTS_FILE ?= results_ctl_seq_link_wdt.xml
+
+TOPLEVEL_LANG ?= verilog
+SIM           ?= verilator
+
+HERE    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+THIS_MK := $(lastword $(MAKEFILE_LIST))
+RTL_DIR := $(HERE)/../../rtl/ctl
+
+WDT_SRC ?= $(RTL_DIR)/dcmac_link_wdt.sv
+
+VERILOG_SOURCES := $(WDT_SRC)
+
+TOPLEVEL := dcmac_link_wdt
+MODULE   := test_dcmac_link_wdt
+
+export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
+
+export CYC_PER_MS     ?= 20
+export LINK_WDT_MS    ?= 20
+export LINK_CONFIRM_N ?= 2
+export ESC_MAX_STAGE  ?= 3
+export T_RXDP_MS      ?= 5
+export T_SETTLE_MS    ?= 2
+export T_ERR_MS       ?= 2
+export NIA_WDT_LAT    ?= 3
+
+SEED ?=
+ifneq ($(SEED),)
+    export RANDOM_SEED        := $(SEED)
+    export COCOTB_RANDOM_SEED := $(SEED)
+endif
+
+ifeq ($(SIM),verilator)
+    EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
+                  -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-SELRANGE
+    COMPILE_ARGS += -GCYC_PER_MS=$(CYC_PER_MS) \
+                    -GLINK_WDT_MS=$(LINK_WDT_MS) \
+                    -GLINK_CONFIRM_N=$(LINK_CONFIRM_N) \
+                    -GESC_MAX_STAGE=$(ESC_MAX_STAGE) \
+                    -GT_RXDP_MS=$(T_RXDP_MS) \
+                    -GT_SETTLE_MS=$(T_SETTLE_MS) \
+                    -GT_ERR_MS=$(T_ERR_MS) \
+                    -GLINK_WDT_MS_MIN=1 \
+                    -GLINK_WDT_MS_MAX=60000
+endif
+
+COCOTB_HDL_TIMEUNIT      ?= 1ns
+COCOTB_HDL_TIMEPRECISION ?= 1ps
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+
+.PHONY: rxonly confirm1 confirm3 slowbus lint
+rxonly:
+	$(MAKE) -f $(THIS_MK) ESC_MAX_STAGE=1
+
+confirm1:
+	$(MAKE) -f $(THIS_MK) LINK_CONFIRM_N=1
+
+confirm3:
+	$(MAKE) -f $(THIS_MK) LINK_CONFIRM_N=3
+
+slowbus:
+	$(MAKE) -f $(THIS_MK) NIA_WDT_LAT=17
+
+lint:
+	verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-VARHIDDEN \
+	  -GCYC_PER_MS=$(CYC_PER_MS) -GLINK_WDT_MS=$(LINK_WDT_MS) \
+	  -GLINK_CONFIRM_N=$(LINK_CONFIRM_N) -GESC_MAX_STAGE=$(ESC_MAX_STAGE) \
+	  --top-module $(TOPLEVEL) $(WDT_SRC)

@@ -1,0 +1,19 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.pack
+# Description : The same set at the packed segment geometry, where more than one frame can
+#               share a beat.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_pktgen_axis_adapter_pack
+COCOTB_RESULTS_FILE ?= results_pktgen_axis_adapter_pack.xml
+
+PACK_LOOP := 1
+VERILOG_SOURCES :=
+
+include $(dir $(lastword $(MAKEFILE_LIST)))Makefile

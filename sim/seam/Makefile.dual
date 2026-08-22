@@ -1,0 +1,96 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.dual
+# Description : The cocotb set for the two client subsystem, over tb_dcmac_dual.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_seam_dual
+COCOTB_RESULTS_FILE ?= results_seam_dual.xml
+
+TOPLEVEL_LANG ?= verilog
+SIM           ?= verilator
+
+HERE    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+MODEL_DIR := $(HERE)/../model
+TB_DIR := $(HERE)/../tb
+RTL_DIR := $(HERE)/../../rtl
+
+VERILOG_SOURCES := \
+  $(RTL_DIR)/dcmac_seg_axis_adapter.sv \
+  $(RTL_DIR)/eth_axis_dwidth.sv \
+  $(MODEL_DIR)/eth_axis_async_fifo.sv \
+  $(RTL_DIR)/dcmac_axis_frame_fifo.sv \
+  $(MODEL_DIR)/tx_frame_fifo.sv \
+  $(RTL_DIR)/ctl/dcmac_mac_ctl_fsm.sv \
+  $(RTL_DIR)/dcmac_axis_adapter.sv \
+  $(TB_DIR)/tb_dcmac_adapter_link.sv \
+  $(TB_DIR)/tb_dcmac_dual.sv
+
+TOPLEVEL := tb_dcmac_dual
+MODULE   := test_dcmac_dual
+
+export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
+
+export N_SEG     ?= 2
+export SEG_W     ?= 128
+export TX_MHZ    ?= 250
+export RX_MHZ    ?= 250
+export PTP_TS_EN ?= 0
+export PTP_TS_W  ?= 80
+export TX_TAG_W  ?= 0
+export PORT_MAX  ?= 6
+
+export NPORTS_C0 ?= 1
+export ANCHOR_C0 ?= 0
+export NPORTS_C1 ?= 1
+export ANCHOR_C1 ?= 1
+
+export SEG_CYC_PER_MS ?= 20
+export T_RXDP_MS      ?= 3
+export T_SERDES_MS    ?= 2
+export NIA_AWAIT_US ?= 300
+export NIA_TEST_US  ?= 1200
+export NIA_WALL_SECS ?= 600
+
+SEED ?=
+ifneq ($(SEED),)
+
+    export RANDOM_SEED        := $(SEED)
+    export COCOTB_RANDOM_SEED := $(SEED)
+endif
+
+ifeq ($(SIM),verilator)
+    EXTRA_ARGS += --trace --trace-structs
+    EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
+                  -Wno-CASEINCOMPLETE -Wno-DECLFILENAME
+    COMPILE_ARGS += -GN_SEG=$(N_SEG) -GSEG_W=$(SEG_W) -GPORT_MAX=$(PORT_MAX)
+    COMPILE_ARGS += -GNPORTS_C0=$(NPORTS_C0) -GANCHOR_C0=$(ANCHOR_C0)
+    COMPILE_ARGS += -GNPORTS_C1=$(NPORTS_C1) -GANCHOR_C1=$(ANCHOR_C1)
+    COMPILE_ARGS += -GPTP_TS_EN=$(PTP_TS_EN) -GPTP_TS_W=$(PTP_TS_W) -GTX_TAG_W=$(TX_TAG_W)
+    COMPILE_ARGS += -GSEG_CYC_PER_MS=$(SEG_CYC_PER_MS) -GT_RXDP_MS=$(T_RXDP_MS) \
+                    -GT_SERDES_MS=$(T_SERDES_MS)
+
+    ifeq ($(FF_BRAM),1)
+        COMPILE_ARGS += +define+DCMAC_FRAME_FIFO_BRAM
+    endif
+
+    ifneq ($(CLIENT_MODULE),)
+        COMPILE_ARGS += +define+NIA_DUAL_CLIENT_MODULE=$(CLIENT_MODULE)
+    endif
+
+    ifeq ($(SHARED_QUAD_RESET),1)
+        COMPILE_ARGS += +define+NIA_DUAL_SHARED_QUAD_RESET
+    endif
+endif
+
+export FF_BRAM ?= 0
+
+COCOTB_HDL_TIMEUNIT      ?= 1ns
+COCOTB_HDL_TIMEPRECISION ?= 1ps
+
+include $(shell cocotb-config --makefiles)/Makefile.sim

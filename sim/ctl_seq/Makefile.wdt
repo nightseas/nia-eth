@@ -1,0 +1,66 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.wdt
+# Description : The cocotb set for the watchdog timer.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_ctl_seq_wdt
+COCOTB_RESULTS_FILE ?= results_ctl_seq_wdt.xml
+
+TOPLEVEL_LANG ?= verilog
+SIM           ?= verilator
+
+HERE    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+THIS_MK := $(lastword $(MAKEFILE_LIST))
+RTL_DIR := $(HERE)/../../rtl/ctl
+
+WDT_SRC ?= $(RTL_DIR)/wdt.sv
+
+VERILOG_SOURCES := $(WDT_SRC)
+
+TOPLEVEL := wdt
+MODULE   := test_wdt
+
+export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
+
+export CYC_PER_MS ?= 20
+export MS_DEFAULT ?= 5
+export MS_MIN     ?= 1
+export MS_MAX     ?= 60000
+
+SEED ?=
+ifneq ($(SEED),)
+    export RANDOM_SEED        := $(SEED)
+    export COCOTB_RANDOM_SEED := $(SEED)
+endif
+
+ifeq ($(SIM),verilator)
+    EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
+                  -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-SELRANGE
+    COMPILE_ARGS += -GCYC_PER_MS=$(CYC_PER_MS) \
+                    -GMS_DEFAULT=$(MS_DEFAULT) \
+                    -GMS_MIN=$(MS_MIN) \
+                    -GMS_MAX=$(MS_MAX)
+endif
+
+COCOTB_HDL_TIMEUNIT      ?= 1ns
+COCOTB_HDL_TIMEPRECISION ?= 1ps
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+
+.PHONY: shortwin longwin lint
+shortwin:
+	$(MAKE) -f $(THIS_MK) MS_DEFAULT=1
+
+longwin:
+	$(MAKE) -f $(THIS_MK) MS_DEFAULT=17 CYC_PER_MS=13
+
+lint:
+	verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-VARHIDDEN \
+	  -GCYC_PER_MS=$(CYC_PER_MS) -GMS_DEFAULT=$(MS_DEFAULT) \
+	  --top-module $(TOPLEVEL) $(WDT_SRC)

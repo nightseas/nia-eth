@@ -1,0 +1,80 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.fsm
+# Description : The cocotb set for the per client MAC control state machine.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_ctl_seq_fsm
+COCOTB_RESULTS_FILE ?= results_ctl_seq_fsm.xml
+
+TOPLEVEL_LANG ?= verilog
+SIM           ?= verilator
+
+HERE    := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+THIS_MK := $(lastword $(MAKEFILE_LIST))
+RTL_DIR := $(HERE)/../../rtl
+
+FSM_SRC ?= $(RTL_DIR)/ctl/dcmac_mac_ctl_fsm.sv
+
+VERILOG_SOURCES := $(FSM_SRC)
+
+TOPLEVEL := dcmac_mac_ctl_fsm
+MODULE   := test_dcmac_mac_ctl_fsm_hold
+
+export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
+
+export CYC_PER_MS      ?= 20
+export T_RXDP_MS       ?= 3
+export T_SERDES_MS     ?= 2
+export LINK_CONFIRM_N  ?= 2
+export NPORTS          ?= 1
+export ANCHOR          ?= 0
+export PORT_MAX        ?= 6
+
+SEED ?=
+ifneq ($(SEED),)
+    export RANDOM_SEED        := $(SEED)
+    export COCOTB_RANDOM_SEED := $(SEED)
+endif
+
+ifeq ($(SIM),verilator)
+    EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
+                  -Wno-CASEINCOMPLETE -Wno-UNSIGNED -Wno-CMPCONST -Wno-SELRANGE
+    COMPILE_ARGS += -GCYC_PER_MS=$(CYC_PER_MS) \
+                    -GT_RXDP_MS=$(T_RXDP_MS) \
+                    -GT_SERDES_MS=$(T_SERDES_MS) \
+                    -GLINK_CONFIRM_N=$(LINK_CONFIRM_N) \
+                    -GNPORTS=$(NPORTS) \
+                    -GANCHOR=$(ANCHOR) \
+                    -GPORT_MAX=$(PORT_MAX)
+endif
+
+COCOTB_HDL_TIMEUNIT      ?= 1ns
+COCOTB_HDL_TIMEPRECISION ?= 1ps
+
+include $(shell cocotb-config --makefiles)/Makefile.sim
+
+.PHONY: confirm1 confirm4 group2 longreset lint
+confirm1:
+	$(MAKE) -f $(THIS_MK) LINK_CONFIRM_N=1
+
+confirm4:
+	$(MAKE) -f $(THIS_MK) LINK_CONFIRM_N=4
+
+group2:
+	$(MAKE) -f $(THIS_MK) NPORTS=2 ANCHOR=2
+
+longreset:
+	$(MAKE) -f $(THIS_MK) T_RXDP_MS=7 T_SERDES_MS=5
+
+lint:
+	verilator --lint-only -Wall -Wno-DECLFILENAME -Wno-VARHIDDEN \
+	  -GCYC_PER_MS=$(CYC_PER_MS) -GT_RXDP_MS=$(T_RXDP_MS) \
+	  -GT_SERDES_MS=$(T_SERDES_MS) -GLINK_CONFIRM_N=$(LINK_CONFIRM_N) \
+	  -GNPORTS=$(NPORTS) -GANCHOR=$(ANCHOR) \
+	  --top-module $(TOPLEVEL) $(FSM_SRC)
