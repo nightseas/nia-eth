@@ -53,6 +53,7 @@ module dcmac_phy #(
   output wire                              seg_clk,
 
   output wire [N_CLIENT-1:0]                seg_rstn,
+  output wire                               seg_rstn_ctl,
   output wire                              usr_clk,
 
   output wire [N_CLIENT-1:0]               rx_seg_valid,
@@ -80,6 +81,10 @@ module dcmac_phy #(
   input  wire [N_CLIENT-1:0]               ctl_tx_send_rfi,
 
   input  wire [N_CLIENT-1:0]               rx_datapath_reset,
+  input  wire [N_CLIENT-1:0]               rx_pll_datapath_reset,
+  input  wire [N_CLIENT-1:0]               gt_all_reset,
+  input  wire [N_CLIENT-1:0]               rx_serdes_reset_req,
+  input  wire [N_CLIENT-1:0]               rx_flush_req,
   input  wire [N_CLIENT*PORT_MAX-1:0]      rx_datapath_reset_ports,
   input  wire [N_CLIENT-1:0]               tx_datapath_reset,
 
@@ -253,17 +258,20 @@ module dcmac_phy #(
   wire clk_rx_axi  = axis_clk;
   wire clk_tx_axi  = axis_clk;
 
+  wire seg_rstn_locked;
+  rst_sync #(.STAGES(4)) i_sync_seg_axis (
+    .clk(axis_clk), .arst_n(clk_wiz_locked),
+    .rst_n(seg_rstn_locked));
+
+  assign seg_rstn_ctl = seg_rstn_locked;
+
   genvar qs;
   generate
   for (qs = 0; qs < N_CLIENT; qs++) begin : g_seg_rstn
-    wire notdone_rx_axis, notdone_tx_axis;
-    rst_sync #(.STAGES(3)) i_sync_rx_axis (
-      .clk(axis_clk), .arst_n(~rst_rx_done_q[qs]),
-      .rst_n(notdone_rx_axis));
-    rst_sync #(.STAGES(3)) i_sync_tx_axis (
-      .clk(axis_clk), .arst_n(~rst_tx_done_q[qs]),
-      .rst_n(notdone_tx_axis));
-    assign seg_rstn[qs] = clk_wiz_locked & ~notdone_rx_axis & ~notdone_tx_axis;
+    wire done_both = rst_rx_done_q[qs] & rst_tx_done_q[qs];
+    (* ASYNC_REG = "TRUE" *) reg [2:0] done_sr = 3'b000;
+    always_ff @(posedge axis_clk) done_sr <= {done_sr[1:0], done_both};
+    assign seg_rstn[qs] = seg_rstn_locked & done_sr[2];
   end
   endgenerate
 
@@ -299,7 +307,7 @@ module dcmac_phy #(
     reg [SW-1:0] rx_dp_cnt   = '0;
     reg          rx_dp_str_r = 1'b0;
     always_ff @(posedge axis_clk) begin
-      if (!seg_rstn[c]) begin
+      if (!seg_rstn_locked) begin
         rx_dp_cnt   <= '0;
         rx_dp_str_r <= 1'b0;
       end else if (rx_dp_reset_s[c]) begin
@@ -316,12 +324,64 @@ module dcmac_phy #(
   end
   endgenerate
 
+  wire [N_CLIENT-1:0] gt_all_reset_stretched;
+  genvar ca;
+  generate
+  for (ca = 0; ca < N_CLIENT; ca++) begin : g_stretch_all
+    reg [SW-1:0] all_cnt   = '0;
+    reg          all_str_r = 1'b0;
+    always_ff @(posedge axis_clk) begin
+      if (!seg_rstn_locked) begin
+        all_cnt   <= '0;
+        all_str_r <= 1'b0;
+      end else if (gt_all_reset[ca]) begin
+        all_cnt   <= RX_DP_RESET_MIN_CYCLES[SW-1:0];
+        all_str_r <= 1'b1;
+      end else if (all_cnt != '0) begin
+        all_cnt   <= all_cnt - 1'b1;
+        all_str_r <= 1'b1;
+      end else begin
+        all_str_r <= 1'b0;
+      end
+    end
+    assign gt_all_reset_stretched[ca] = all_str_r;
+  end
+  endgenerate
+
+  wire [N_CLIENT-1:0] rx_pll_dp_reset_stretched;
+  genvar cp;
+  generate
+  for (cp = 0; cp < N_CLIENT; cp++) begin : g_stretch_pll
+    reg [SW-1:0] pll_cnt   = '0;
+    reg          pll_str_r = 1'b0;
+    always_ff @(posedge axis_clk) begin
+      if (!seg_rstn_locked) begin
+        pll_cnt   <= '0;
+        pll_str_r <= 1'b0;
+      end else if (rx_pll_datapath_reset[cp]) begin
+        pll_cnt   <= RX_DP_RESET_MIN_CYCLES[SW-1:0];
+        pll_str_r <= 1'b1;
+      end else if (pll_cnt != '0) begin
+        pll_cnt   <= pll_cnt - 1'b1;
+        pll_str_r <= 1'b1;
+      end else begin
+        pll_str_r <= 1'b0;
+      end
+    end
+    assign rx_pll_dp_reset_stretched[cp] = pll_str_r;
+  end
+  endgenerate
+
   logic [5:0] rx_channel_flush_i;
   always_comb begin
     rx_channel_flush_i = 6'b0;
     for (int cc = 0; cc < N_CLIENT; cc++)
       for (int p = 0; p < PORT_MAX && p < 6; p++)
         if (rx_dp_ports_s[cc*PORT_MAX + p]) rx_channel_flush_i[p] = 1'b1;
+    if (rx_flush_req[0]) rx_channel_flush_i[ANCHOR_0] = 1'b1;
+    if (N_CLIENT > 1) begin
+      if (rx_flush_req[(N_CLIENT > 1) ? 1 : 0]) rx_channel_flush_i[ANCHOR_1] = 1'b1;
+    end
   end
 
   wire _unused_ctl = |{ctl_rx_enable, ctl_rx_force_resync, ctl_tx_enable,
@@ -883,9 +943,9 @@ module dcmac_phy #(
     .INTF0_TX_clrb_leaf_out           (gt_tx_clrb_leaf_out[0]),
     .INTF0_RX_clr_out                 (gt_rx_clr_out[0]),
     .INTF0_RX_clrb_leaf_out           (gt_rx_clrb_leaf_out[0]),
-    .INTF0_rst_all_in                 (sys_reset),
+    .INTF0_rst_all_in                 (sys_reset | gt_all_reset_stretched[0]),
     .INTF0_rst_tx_pll_and_datapath_in (1'b0),
-    .INTF0_rst_rx_pll_and_datapath_in (1'b0),
+    .INTF0_rst_rx_pll_and_datapath_in (rx_pll_dp_reset_stretched[0]),
     .INTF0_rst_tx_done_out            (rst_tx_done_q[0]),
     .INTF0_rst_rx_done_out            (rst_rx_done_q[0]),
 

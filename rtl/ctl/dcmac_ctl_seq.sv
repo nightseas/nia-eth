@@ -263,6 +263,40 @@ module dcmac_ctl_seq
         a  = (rem % 2 == 0) ? pp(p, O_CHCTL_TX) : pp(p, O_CHCTL_RX);
       end
 
+      else if (EN_STATS && pc >= P_STATS && pc < P_STATS + N_STAT) begin
+        g   = (pc - P_STATS) / (STATS_PER*NP);
+        rem = (pc - P_STATS) % (STATS_PER*NP);
+        p   = anch(g) + rem / STATS_PER;
+        k   = rem % STATS_PER;
+        case (k)
+          0:  soff = O_RX_PHY_RT_STATUS;
+          1:  soff = O_RX_PHY_STATUS;
+          2:  soff = O_RX_MAC_RT_STATUS;
+          3:  soff = O_RX_MODE;
+          4:  soff = O_TX_MODE;
+          5:  soff = O_PCTL_RX;
+          6:  soff = O_PCTL_TX;
+          7:  soff = O_CHCTL_RX;
+          8:  soff = O_CHCTL_TX;
+          9:  soff = O_GLOBAL_MODE;
+          10: soff = O_CONFIG_REV;
+          11: soff = O_FEC_CW;
+          12: soff = O_FEC_CORR;
+          13: soff = O_FEC_UNCORR;
+          14: soff = O_TICK_RX;
+          15: soff = O_TICK_TX;
+          16: soff = O_SRX_PKTS;
+          17: soff = O_SRX_GPKTS;
+          18: soff = O_STX_PKTS;
+          19: soff = O_STX_GPKTS;
+          20: soff = O_SRX_BYTES;
+          21: soff = O_STX_BYTES;
+          default: soff = O_RX_PHY_RT_STATUS;
+        endcase
+        op = OP_RD;
+        a  = (k == 9 || k == 10) ? gg(soff) : pp(p, soff);
+      end
+
       else if (pc == P_DONE)   begin op = OP_DONE;  end
 
       return {op, a, d, w};

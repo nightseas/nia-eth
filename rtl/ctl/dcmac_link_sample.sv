@@ -47,15 +47,15 @@ module dcmac_link_sample #(
   output wire [31:0]     req_mask,
   input  wire            req_gnt,
   input  wire            req_ack,
-  /* verilator lint_off UNUSED */
 
   input  wire [31:0]     ack_rdata,
-  /* verilator lint_on UNUSED */
   input  wire            ack_aligned,
   input  wire            ack_err,
 
   output wire        aligned,
   output wire        valid,
+  output wire [31:0] align_word,
+  output wire [31:0] align_sticky,
   output wire [3:0]  fault,
   output wire        remote_fault,
   output wire        recv_local_fault,
@@ -125,6 +125,8 @@ module dcmac_link_sample #(
 
   logic         aligned_r;
   logic         valid_r;
+  logic [31:0]  align_word_r;
+  logic [31:0]  align_sticky_r;
   logic [3:0]   fault_r;
   logic         ever_aligned_r;
 
@@ -165,6 +167,8 @@ module dcmac_link_sample #(
       sample_cnt_r  <= '0;
       esc_cnt_r     <= '0;
       bus_err_cnt_r <= '0;
+      align_word_r  <= '0;
+      align_sticky_r<= '0;
     end else if (!enable) begin
 
       st            <= S_OFF;
@@ -176,9 +180,11 @@ module dcmac_link_sample #(
       reset_req_r   <= 1'b0;
       bus_err_r     <= '0;
       bus_stuck_r   <= 1'b0;
+      align_word_r  <= '0;
+      align_sticky_r<= '0;
     end else begin
 
-      if (wdt_timeout) begin
+      if (wdt_timeout && valid_r && !aligned_r) begin
         reset_req_r <= 1'b1;
         esc_cnt_r   <= esc_cnt_r + 16'd1;
       end
@@ -217,6 +223,8 @@ module dcmac_link_sample #(
               bus_err_r    <= '0;
               bus_stuck_r  <= 1'b0;
               aligned_r    <= ack_aligned;
+              align_word_r <= ack_rdata;
+              align_sticky_r <= align_sticky_r | ack_rdata;
               valid_r      <= 1'b1;
               sample_cnt_r <= sample_cnt_r + 16'd1;
 
@@ -297,6 +305,8 @@ module dcmac_link_sample #(
 
   assign aligned          = aligned_r;
   assign valid            = valid_r;
+  assign align_word       = align_word_r;
+  assign align_sticky     = align_sticky_r;
   assign fault            = fault_r;
   assign remote_fault     = fault_r[0];
   assign recv_local_fault = fault_r[3];

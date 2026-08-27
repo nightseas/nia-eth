@@ -52,6 +52,7 @@ module dcmac_phy #(
   output wire                              seg_clk,
 
   output wire [N_CLIENT-1:0]                seg_rstn,
+  output wire                               seg_rstn_ctl,
   output wire                              usr_clk,
 
   output wire [N_CLIENT-1:0]               rx_seg_valid,
@@ -79,6 +80,10 @@ module dcmac_phy #(
   input  wire [N_CLIENT-1:0]               ctl_tx_send_rfi,
 
   input  wire [N_CLIENT-1:0]               rx_datapath_reset,
+  input  wire [N_CLIENT-1:0]               rx_pll_datapath_reset,
+  input  wire [N_CLIENT-1:0]               gt_all_reset,
+  input  wire [N_CLIENT-1:0]               rx_serdes_reset_req,
+  input  wire [N_CLIENT-1:0]               rx_flush_req,
   input  wire [N_CLIENT*PORT_MAX-1:0]      rx_datapath_reset_ports,
   input  wire [N_CLIENT-1:0]               tx_datapath_reset,
 
@@ -117,6 +122,7 @@ module dcmac_phy #(
     rstn_rr <= rstn_r;
   end
   assign seg_rstn = {N_CLIENT{rstn_rr}};
+  assign seg_rstn_ctl = rstn_rr;
 
   wire _unused = |{gt_ref_clk0_n, gt_ref_clk1_p, gt_ref_clk1_n, gt_rxp_in, gt_rxn_in,
                    LOOPBACK_MODE, ANCHOR_0[0], ANCHOR_1[0], RX_DP_RESET_MIN_CYCLES[0],
@@ -213,13 +219,15 @@ if (LOOPBACK_MODE == 3'b000) begin : g_tieoff
   assign tx_seg_ready = {N_CLIENT{1'b0}};
   wire _unused_lb = |{tx_seg_valid, tx_seg_dat, tx_seg_ena, tx_seg_sop, tx_seg_eop,
                       tx_seg_err, tx_seg_mty, ctl_rx_enable, ctl_tx_enable,
-                      rx_datapath_reset, rx_datapath_reset_ports};
+                      rx_datapath_reset, rx_datapath_reset_ports, rx_flush_req,
+                      rx_pll_datapath_reset, gt_all_reset};
 end else begin : g_loopback
 
   wire [N_CLIENT-1:0] rx_kill_v;
   for (genvar k = 0; k < N_CLIENT; k++) begin : g_kill
     wire [PORT_MAX-1:0] kports = rx_datapath_reset_ports[k*PORT_MAX +: PORT_MAX];
-    assign rx_kill_v[k] = rx_datapath_reset[k] | ((|kports) & ~ctl_rx_enable[k]);
+    assign rx_kill_v[k] = rx_datapath_reset[k] | rx_serdes_reset_req[k]
+                        | ((|kports) & ~ctl_rx_enable[k]);
   end
 
   localparam int ALIGN_CYCLES = 256;

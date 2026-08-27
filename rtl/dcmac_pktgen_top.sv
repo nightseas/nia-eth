@@ -74,6 +74,20 @@ module dcmac_pktgen_top #(
   output wire [15:0]             ctl_seq_pc,
   input  wire [7:0]              ctl_stat_rd_idx,
   output wire [31:0]             ctl_stat_rd_data,
+  output wire [31:0]             ctl_align_word,
+  output wire [31:0]             ctl_align_sticky,
+  output wire [3:0]              ctl_fault_nibble,
+  output wire                    ctl_bus_stuck,
+  output wire                    ctl_link_valid,
+  output wire                    ctl_ever_aligned,
+  output wire                    ctl_window_running,
+  output wire                    ctl_last_was_fault,
+  output wire [15:0]             ctl_sample_count,
+  output wire [15:0]             ctl_esc_count,
+  output wire [15:0]             ctl_bus_err_count,
+  output wire [15:0]             ctl_exec_tmo_count,
+  output wire [7:0]              ctl_repair_dp_count,
+  output wire [7:0]              ctl_repair_pll_count,
 
   input  wire [PKTGEN_AXIL_AW-1:0] pg_awaddr,
   input  wire                    pg_awvalid,
@@ -108,7 +122,18 @@ module dcmac_pktgen_top #(
 
   wire                     fsm_link_up, fsm_tx_rst_seg, rx_pcs_aligned_grp;
   wire                     port_rx_dp_reset, port_core_serdes_reset;
+  wire                     port_rx_pll_dp_reset;
+  wire                     port_gt_all_reset;
+  wire                     port_rx_serdes_reset;
+  wire                     port_rx_flush;
+  wire                     gt_rx_done_seg;
+  wire [7:0]               port_repair_count;
+  wire [7:0]               port_repair_tmo_count;
+  wire                     seg_rstn_ctl_i;
   wire [PORT_MAX-1:0]      port_rx_dp_reset_ports;
+
+  wire                     seq_rx_dp_reset;
+  wire [PORT_MAX-1:0]      seq_rx_dp_ports;
 
   wire [7:0]               gt_tx_reset_done_raw, gt_rx_reset_done_raw;
   wire [7:0]               gt_tx_reset_done, gt_rx_reset_done;
@@ -128,6 +153,13 @@ module dcmac_pktgen_top #(
   always_ff @(posedge usr_clk_i) usr_rstn_sr <= {usr_rstn_sr[1:0], ~sys_reset};
   wire usr_rstn_i = usr_rstn_sr[2];
   assign usr_rstn = usr_rstn_i;
+  assign ctl_repair_dp_count  = port_repair_count;
+  assign ctl_repair_pll_count = port_repair_tmo_count;
+
+  dcmac_sync2 #(.WIDTH(1), .STAGES(2), .INIT('0)) u_sync_gt_rx_done_seg (
+    .clk  (seg_clk_i),
+    .din  (|gt_rx_reset_done_raw),
+    .dout (gt_rx_done_seg));
 
   wire host_rx_req_gated;
 
@@ -180,7 +212,7 @@ module dcmac_pktgen_top #(
     .aresetn                 (usr_rstn_i),
 
     .seg_clk                 (seg_clk_i),
-    .seg_rstn                (seg_rstn_i[0]),
+    .seg_rstn                (seg_rstn_ctl_i),
 
     .link_up                     (fsm_link_up),
     .tx_rst_seg                  (fsm_tx_rst_seg),
@@ -193,6 +225,13 @@ module dcmac_pktgen_top #(
     .ctl_tx_send_lfi             (ctl_tx_send_lfi),
     .ctl_tx_send_rfi             (ctl_tx_send_rfi),
     .fsm_rx_datapath_reset       (port_rx_dp_reset),
+    .fsm_rx_pll_datapath_reset   (port_rx_pll_dp_reset),
+    .fsm_gt_all_reset            (port_gt_all_reset),
+    .fsm_rx_serdes_reset         (port_rx_serdes_reset),
+    .fsm_rx_flush                (port_rx_flush),
+    .fsm_gt_rx_done              (gt_rx_done_seg),
+    .fsm_repair_count            (port_repair_count),
+    .fsm_repair_tmo_count        (port_repair_tmo_count),
     .fsm_rx_datapath_reset_ports (port_rx_dp_reset_ports),
     .host_link_reset_req         (host_rx_req_gated),
     .host_rx_force_resync_req    (ctl_rx_force_resync_req),
@@ -217,8 +256,8 @@ module dcmac_pktgen_top #(
 
     .gt_tx_reset_done        (gt_tx_reset_done),
     .gt_rx_reset_done        (gt_rx_reset_done),
-    .rx_datapath_reset       (),
-    .rx_datapath_reset_ports (),
+    .rx_datapath_reset       (seq_rx_dp_reset),
+    .rx_datapath_reset_ports (seq_rx_dp_ports),
     .core_serdes_reset       (port_core_serdes_reset),
     .tx_datapath_reset       (),
 
@@ -245,17 +284,19 @@ module dcmac_pktgen_top #(
 
     .link_reset_req          (),
     .link_remote_fault       (),
-    .link_bus_stuck          (),
-    .link_ever_aligned       (),
-    .link_fault_nibble       (),
-    .sup_esc_count           (),
-    .link_sample_count       (),
-    .link_valid              (),
-    .link_window_running     (),
-    .link_last_was_fault     (),
-    .link_bus_err_count      (),
+    .link_bus_stuck          (ctl_bus_stuck),
+    .link_ever_aligned       (ctl_ever_aligned),
+    .link_fault_nibble       (ctl_fault_nibble),
+    .link_align_word         (ctl_align_word),
+    .link_align_sticky       (ctl_align_sticky),
+    .sup_esc_count           (ctl_esc_count),
+    .link_sample_count       (ctl_sample_count),
+    .link_valid              (ctl_link_valid),
+    .link_window_running     (ctl_window_running),
+    .link_last_was_fault     (ctl_last_was_fault),
+    .link_bus_err_count      (ctl_bus_err_count),
     .link_window_remaining   (),
-    .exec_tmo_count          ()
+    .exec_tmo_count          (ctl_exec_tmo_count)
   );
 
   dcmac_seg_pktgen #(
@@ -306,6 +347,11 @@ module dcmac_pktgen_top #(
     .s_axil_rready (pg_rready)
   );
 
+  localparam logic [PORT_MAX-1:0] GROUP_MASK = ((PORT_MAX)'((1 << NPORTS) - 1)) << ANCHOR;
+  wire [PORT_MAX-1:0] seq_rx_hit      = seq_rx_dp_ports & GROUP_MASK;
+  wire                phy_rx_dp_reset = port_rx_dp_reset | (seq_rx_dp_reset & (|seq_rx_hit));
+  wire [PORT_MAX-1:0] phy_rx_dp_ports = port_rx_dp_reset_ports | seq_rx_hit;
+
   dcmac_phy #(
     .N_CLIENT(1),
     .N_SEG(N_SEG), .SEG_W(SEG_W), .PORT_MAX(PORT_MAX),
@@ -326,6 +372,7 @@ module dcmac_pktgen_top #(
 
     .seg_clk                 (seg_clk_i),
     .seg_rstn                (seg_rstn_i),
+    .seg_rstn_ctl            (seg_rstn_ctl_i),
     .usr_clk                 (usr_clk_i),
 
     .rx_seg_valid            (rx_seg_valid),
@@ -352,8 +399,12 @@ module dcmac_pktgen_top #(
     .ctl_tx_send_lfi         (ctl_tx_send_lfi),
     .ctl_tx_send_rfi         (ctl_tx_send_rfi),
 
-    .rx_datapath_reset       (port_rx_dp_reset),
-    .rx_datapath_reset_ports (port_rx_dp_reset_ports),
+    .rx_datapath_reset       (phy_rx_dp_reset),
+    .rx_pll_datapath_reset   (port_rx_pll_dp_reset),
+    .gt_all_reset            (port_gt_all_reset),
+    .rx_serdes_reset_req     (port_rx_serdes_reset),
+    .rx_flush_req            (port_rx_flush),
+    .rx_datapath_reset_ports (phy_rx_dp_ports),
     .tx_datapath_reset       (ctl_tx_datapath_reset_req),
 
     .axil_aclk               (usr_clk_i),

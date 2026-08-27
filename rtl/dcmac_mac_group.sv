@@ -169,6 +169,12 @@ module dcmac_mac_group #(
   wire [N_CLIENT-1:0] p_ctl_tx_send_idle, p_ctl_tx_send_lfi, p_ctl_tx_send_rfi;
 
   wire [N_CLIENT-1:0]            p_rx_dp_reset, p_tx_dp_reset, p_core_serdes_reset;
+  wire [N_CLIENT-1:0]            p_rx_pll_dp_reset;
+  wire [N_CLIENT-1:0]            p_gt_all_reset;
+  wire [N_CLIENT-1:0]            p_rx_serdes_reset;
+  wire [N_CLIENT-1:0]            p_rx_flush;
+  wire [N_CLIENT-1:0]            gt_rx_done_seg;
+  wire                           seg_rstn_ctl_i;
   wire [N_CLIENT*PORT_MAX-1:0]   p_rx_dp_ports;
 
   wire [8*N_CLIENT-1:0] gt_tx_reset_done_raw, gt_rx_reset_done_raw;
@@ -188,6 +194,19 @@ module dcmac_mac_group #(
       .dout (gt_rx_done_sync[8*q +: 8]));
   end
   endgenerate
+
+  wire [N_CLIENT-1:0] gt_rx_done_raw_client;
+  genvar qd;
+  generate
+  for (qd = 0; qd < N_CLIENT; qd++) begin : g_done_client
+    assign gt_rx_done_raw_client[qd] = |gt_rx_reset_done_raw[8*qd +: 8];
+  end
+  endgenerate
+
+  dcmac_sync2 #(.WIDTH(N_CLIENT), .STAGES(2), .INIT('0)) u_sync_gt_rx_done_seg (
+    .clk  (seg_clk_i),
+    .din  (gt_rx_done_raw_client),
+    .dout (gt_rx_done_seg));
 
   logic [7:0] gt_tx_done_all, gt_rx_done_all;
   always_comb begin
@@ -265,7 +284,7 @@ module dcmac_mac_group #(
     .aresetn                 (seq_rstn),
 
     .seg_clk                 (seg_clk_i),
-    .seg_rstn                (seg_rstn_i),
+    .seg_rstn                ({N_CLIENT{seg_rstn_ctl_i}}),
 
     .link_up                     (fsm_link_up),
     .tx_rst_seg                  (fsm_tx_rst_seg),
@@ -278,6 +297,13 @@ module dcmac_mac_group #(
     .ctl_tx_send_lfi             (p_ctl_tx_send_lfi),
     .ctl_tx_send_rfi             (p_ctl_tx_send_rfi),
     .fsm_rx_datapath_reset       (p_rx_dp_reset),
+    .fsm_rx_pll_datapath_reset   (p_rx_pll_dp_reset),
+    .fsm_gt_all_reset            (p_gt_all_reset),
+    .fsm_rx_serdes_reset         (p_rx_serdes_reset),
+    .fsm_rx_flush                (p_rx_flush),
+    .fsm_gt_rx_done              (gt_rx_done_seg),
+    .fsm_repair_count            (),
+    .fsm_repair_tmo_count        (),
     .fsm_rx_datapath_reset_ports (p_rx_dp_ports),
     .host_link_reset_req         (host_rx_dp_req_gated),
     .host_rx_force_resync_req    (ctl_rx_force_resync_req),
@@ -533,6 +559,7 @@ module dcmac_mac_group #(
 
     .seg_clk                 (seg_clk_i),
     .seg_rstn                (seg_rstn_i),
+    .seg_rstn_ctl            (seg_rstn_ctl_i),
     .usr_clk                 (usr_clk_i),
 
     .rx_seg_valid            (rx_seg_valid),
@@ -560,6 +587,10 @@ module dcmac_mac_group #(
     .ctl_tx_send_rfi         (p_ctl_tx_send_rfi),
 
     .rx_datapath_reset       (phy_rx_dp_reset),
+    .rx_pll_datapath_reset   (p_rx_pll_dp_reset),
+    .gt_all_reset            (p_gt_all_reset),
+    .rx_serdes_reset_req     (p_rx_serdes_reset),
+    .rx_flush_req            (p_rx_flush),
     .rx_datapath_reset_ports (phy_rx_dp_ports),
     .tx_datapath_reset       (phy_tx_dp_reset),
 

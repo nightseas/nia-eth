@@ -66,6 +66,13 @@ module dcmac_link_ctl
   output wire [N_GROUP-1:0]         ctl_tx_send_lfi,
   output wire [N_GROUP-1:0]         ctl_tx_send_rfi,
   output wire [N_GROUP-1:0]         fsm_rx_datapath_reset,
+  output wire [N_GROUP-1:0]         fsm_rx_pll_datapath_reset,
+  output wire [N_GROUP-1:0]         fsm_gt_all_reset,
+  output wire [N_GROUP-1:0]         fsm_rx_serdes_reset,
+  output wire [N_GROUP-1:0]         fsm_rx_flush,
+  input  wire [N_GROUP-1:0]         fsm_gt_rx_done,
+  output wire [8*N_GROUP-1:0]       fsm_repair_count,
+  output wire [8*N_GROUP-1:0]       fsm_repair_tmo_count,
   output wire [PORT_MAX*N_GROUP-1:0] fsm_rx_datapath_reset_ports,
 
   input  wire [N_GROUP-1:0]         host_link_reset_req,
@@ -122,6 +129,8 @@ module dcmac_link_ctl
   output wire [N_GROUP-1:0]         link_bus_stuck,
   output wire [N_GROUP-1:0]         link_ever_aligned,
   output wire [4*N_GROUP-1:0]       link_fault_nibble,
+  output wire [32*N_GROUP-1:0]      link_align_word,
+  output wire [32*N_GROUP-1:0]      link_align_sticky,
 
   output wire [16*N_GROUP-1:0]      sup_esc_count,
   output wire [16*N_GROUP-1:0]      link_sample_count,
@@ -147,7 +156,40 @@ module dcmac_link_ctl
   wire [NG-1:0] seq_link_up;
   wire          seq_bringup_done;
 
-  wire          restart_any = bringup_restart_req;
+  wire [NG-1:0] gt_all_reset_a;
+  dcmac_sync2 #(.WIDTH(NG), .STAGES(2), .INIT('0)) u_sync_gt_all (
+    .clk  (aclk),
+    .din  (fsm_gt_all_reset),
+    .dout (gt_all_reset_a));
+
+  localparam int ESC_RESTART_CYC = 50 * CYC_PER_MS;
+  localparam int ERW = $clog2(ESC_RESTART_CYC + 1);
+
+  logic              esc_seen_r;
+  logic [ERW-1:0]    esc_cnt_r;
+  logic              esc_restart_r;
+  always_ff @(posedge aclk) begin
+    if (!aresetn) begin
+      esc_seen_r    <= 1'b0;
+      esc_cnt_r     <= '0;
+      esc_restart_r <= 1'b0;
+    end else begin
+      esc_restart_r <= 1'b0;
+      if (!esc_seen_r) begin
+        if (|gt_all_reset_a) begin
+          esc_seen_r <= 1'b1;
+          esc_cnt_r  <= ERW'(ESC_RESTART_CYC);
+        end
+      end else if (esc_cnt_r != '0) begin
+        esc_cnt_r <= esc_cnt_r - 1'b1;
+      end else begin
+        esc_restart_r <= 1'b1;
+        esc_seen_r    <= 1'b0;
+      end
+    end
+  end
+
+  wire          restart_any = bringup_restart_req | esc_restart_r;
 
   dcmac_ctl_seq #(
     .PORT_MAX       (PORT_MAX),
@@ -258,6 +300,8 @@ module dcmac_link_ctl
 
   wire [NG-1:0] sup_aligned;
 
+  wire [32*NG-1:0]   sup_align_word;
+  wire [32*NG-1:0]   sup_align_sticky;
   wire [NG-1:0]      sup_valid;
   wire [NG*4-1:0]    sup_fault;
   wire [NG-1:0]      sup_remote_fault;
@@ -332,6 +376,8 @@ module dcmac_link_ctl
         .ack_err         (ack_err),
         .aligned         (sup_aligned[g]),
         .valid           (sup_valid[g]),
+        .align_word      (sup_align_word[g*32 +: 32]),
+        .align_sticky    (sup_align_sticky[g*32 +: 32]),
         .fault           (sup_fault[g*4 +: 4]),
         .remote_fault    (sup_remote_fault[g]),
         .recv_local_fault(),
@@ -481,7 +527,14 @@ module dcmac_link_ctl
         .ctl_tx_send_lfi         (ctl_tx_send_lfi[g]),
         .ctl_tx_send_rfi         (ctl_tx_send_rfi[g]),
         .rx_datapath_reset       (fsm_rx_datapath_reset[g]),
+        .rx_pll_datapath_reset   (fsm_rx_pll_datapath_reset[g]),
+        .gt_all_reset_req        (fsm_gt_all_reset[g]),
+        .rx_serdes_reset_req     (fsm_rx_serdes_reset[g]),
+        .rx_flush_req            (fsm_rx_flush[g]),
+        .gt_rx_done              (fsm_gt_rx_done[g]),
         .rx_datapath_reset_ports (fsm_rx_datapath_reset_ports[g*PORT_MAX +: PORT_MAX]),
+        .repair_count            (fsm_repair_count[g*8 +: 8]),
+        .repair_tmo_count        (fsm_repair_tmo_count[g*8 +: 8]),
         .tx_rst_seg              (tx_rst_seg[g]),
         .link_up                 (link_up[g]),
         .carrier                 (carrier[g]),
@@ -496,6 +549,8 @@ module dcmac_link_ctl
   assign link_ever_aligned = sup_ever_aligned;
   assign link_fault_nibble = sup_fault;
   assign link_sample_count = sup_sample_count;
+  assign link_align_word   = sup_align_word;
+  assign link_align_sticky = sup_align_sticky;
 
   wire [NG-1:0] link_reset_ack_s;
   dcmac_sync2 #(.WIDTH(NG), .STAGES(2), .INIT('0)) u_ack_sync (

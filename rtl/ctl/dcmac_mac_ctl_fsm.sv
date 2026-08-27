@@ -21,7 +21,11 @@ module dcmac_mac_ctl_fsm #(
   parameter int NPORTS          = 1,
   parameter int ANCHOR          = 0,
 
-  parameter int LINK_CONFIRM_N  = 2
+  parameter int LINK_CONFIRM_N  = 2,
+
+  parameter int PLL_ESC_EVERY   = 0,
+
+  parameter int GT_ESC_AFTER    = 0
 )(
   input  logic       seg_clk,
   input  logic       seg_rstn,
@@ -32,6 +36,8 @@ module dcmac_mac_ctl_fsm #(
   input  logic       stat_remote_fault,
 
   input  logic       reset_req,
+
+  input  logic       gt_rx_done,
 
   output logic       reset_ack,
 
@@ -45,8 +51,15 @@ module dcmac_mac_ctl_fsm #(
   output logic       ctl_tx_send_rfi,
 
   output logic                rx_datapath_reset,
+  output logic                rx_pll_datapath_reset,
+  output logic                gt_all_reset_req,
+  output logic                rx_serdes_reset_req,
+  output logic                rx_flush_req,
 
   output logic [PORT_MAX-1:0] rx_datapath_reset_ports,
+
+  output logic [7:0]          repair_count,
+  output logic [7:0]          repair_tmo_count,
 
   output logic       tx_rst_seg,
   output logic       link_up,
@@ -59,10 +72,16 @@ module dcmac_mac_ctl_fsm #(
   localparam logic [2:0] S_WAIT_ALIGN = 3'd2;
   localparam logic [2:0] S_XFER       = 3'd3;
   localparam logic [2:0] S_RX_RESET   = 3'd4;
+  localparam logic [2:0] S_RX_DONE    = 3'd5;
+  localparam logic [2:0] S_RX_FLUSH   = 3'd6;
+  localparam logic [2:0] S_RX_SETTLE  = 3'd7;
 
   localparam int CW = 32;
   localparam logic [CW-1:0] rxdp_cyc   = CW'(T_RXDP_MS)   * CW'(CYC_PER_MS);
-  localparam logic [CW-1:0] serdes_cyc = CW'(T_SERDES_MS) * CW'(CYC_PER_MS);
+  localparam logic [CW-1:0] done_cyc   = CW'(T_SERDES_MS) * CW'(CYC_PER_MS);
+  localparam logic [CW-1:0] settle_cyc = CW'(T_SERDES_MS) * CW'(CYC_PER_MS);
+  localparam int FLUSH_CYC_EFF = (CYC_PER_MS >= 5000) ? (CYC_PER_MS / 100) : 2;
+  localparam logic [CW-1:0] flush_cyc  = CW'(FLUSH_CYC_EFF);
   localparam int CFMW = (LINK_CONFIRM_N < 2) ? 1 : $clog2(LINK_CONFIRM_N + 1);
 
   initial begin
@@ -79,6 +98,10 @@ module dcmac_mac_ctl_fsm #(
 
   logic [2:0]    state;
   logic          aligned_1d;
+  wire           use_pll_reset = (PLL_ESC_EVERY != 0)
+                               && (esc_phase_r == 8'(PLL_ESC_EVERY - 1));
+  wire           use_gt_all_reset = (GT_ESC_AFTER != 0)
+                                  && (fail_run_r >= 8'(GT_ESC_AFTER - 1));
 
   logic [CW-1:0] rst_cnt;
   logic [CFMW-1:0] fall_cnt;
@@ -87,6 +110,14 @@ module dcmac_mac_ctl_fsm #(
   logic ctl_rx_enable_r, ctl_tx_enable_r;
   logic ctl_tx_send_lfi_r, ctl_tx_send_rfi_r, ctl_tx_send_idle_r;
   logic rx_dp_reset_r;
+  logic rx_pll_dp_reset_r;
+  logic gt_all_reset_r;
+  logic [7:0] fail_run_r;
+  logic [7:0] esc_phase_r;
+  logic rx_serdes_req_r;
+  logic rx_flush_req_r;
+  logic [7:0] repair_cnt_r;
+  logic [7:0] repair_tmo_cnt_r;
   logic post_r;
   logic reset_ack_r;
 
@@ -105,6 +136,14 @@ module dcmac_mac_ctl_fsm #(
       ctl_tx_send_rfi_r  <= 1'b1;
       ctl_tx_send_idle_r <= 1'b0;
       rx_dp_reset_r      <= 1'b0;
+      rx_pll_dp_reset_r  <= 1'b0;
+      gt_all_reset_r     <= 1'b0;
+      fail_run_r         <= '0;
+      esc_phase_r        <= '0;
+      rx_serdes_req_r    <= 1'b0;
+      rx_flush_req_r     <= 1'b0;
+      repair_cnt_r       <= '0;
+      repair_tmo_cnt_r   <= '0;
       post_r             <= 1'b0;
       reset_ack_r        <= 1'b0;
     end else begin
@@ -118,6 +157,12 @@ module dcmac_mac_ctl_fsm #(
         ctl_tx_send_lfi_r <= 1'b1;
         ctl_tx_send_rfi_r <= 1'b1;
         rx_dp_reset_r     <= 1'b0;
+        rx_pll_dp_reset_r <= 1'b0;
+        gt_all_reset_r    <= 1'b0;
+        fail_run_r        <= '0;
+        esc_phase_r       <= '0;
+        rx_serdes_req_r   <= 1'b0;
+        rx_flush_req_r    <= 1'b0;
         post_r            <= 1'b0;
         reset_ack_r       <= 1'b0;
         rst_cnt           <= '0;
@@ -136,11 +181,17 @@ module dcmac_mac_ctl_fsm #(
         end
 
         S_WAIT_ALIGN: begin
-          if (aligned_1d)      state <= S_XFER;
+          if (aligned_1d) begin
+            fail_run_r <= '0;
+            state      <= S_XFER;
+          end
           else if (reset_req)  begin
-            reset_ack_r <= 1'b1;
-            rst_cnt     <= rxdp_cyc;
-            state       <= S_RX_RESET;
+            reset_ack_r     <= 1'b1;
+            rst_cnt         <= rxdp_cyc;
+            repair_cnt_r    <= repair_cnt_r + 8'd1;
+            rx_serdes_req_r <= 1'b1;
+            rx_flush_req_r  <= 1'b1;
+            state           <= S_RX_RESET;
           end
         end
 
@@ -164,29 +215,71 @@ module dcmac_mac_ctl_fsm #(
             fall_cnt          <= CFMW'(LINK_CONFIRM_N);
             reset_ack_r       <= 1'b1;
             rst_cnt           <= rxdp_cyc;
+            repair_cnt_r      <= repair_cnt_r + 8'd1;
+            rx_serdes_req_r   <= 1'b1;
+            rx_flush_req_r    <= 1'b1;
             state             <= S_RX_RESET;
           end
         end
 
         S_RX_RESET: begin
-          ctl_rx_enable_r <= 1'b0;
-          if (!post_r) begin
-            rx_dp_reset_r <= 1'b1;
-            if (rst_cnt == '0) begin
-              rx_dp_reset_r <= 1'b0;
-              post_r        <= 1'b1;
-              rst_cnt       <= serdes_cyc;
+          ctl_rx_enable_r   <= 1'b0;
+          rx_dp_reset_r     <= ~use_pll_reset;
+          rx_pll_dp_reset_r <=  use_pll_reset;
+          gt_all_reset_r    <= use_gt_all_reset;
+          if (rst_cnt == '0) begin
+            rx_dp_reset_r     <= 1'b0;
+            rx_pll_dp_reset_r <= 1'b0;
+            rst_cnt       <= done_cyc;
+            state         <= S_RX_DONE;
+          end else begin
+            rst_cnt <= rst_cnt - 1'b1;
+          end
+        end
+
+        S_RX_DONE: begin
+          if (gt_rx_done) begin
+            rst_cnt <= flush_cyc;
+            state   <= S_RX_FLUSH;
+          end else if (rst_cnt == '0) begin
+            repair_tmo_cnt_r <= repair_tmo_cnt_r + 8'd1;
+            rst_cnt          <= flush_cyc;
+            state            <= S_RX_FLUSH;
+          end else begin
+            rst_cnt <= rst_cnt - 1'b1;
+          end
+        end
+
+        S_RX_FLUSH: begin
+          if (rst_cnt == '0) begin
+            if (!post_r) begin
+              rx_flush_req_r <= 1'b0;
+              post_r         <= 1'b1;
+              rst_cnt        <= flush_cyc;
             end else begin
-              rst_cnt <= rst_cnt - 1'b1;
+              rx_serdes_req_r <= 1'b0;
+              post_r          <= 1'b0;
+              rst_cnt         <= settle_cyc;
+              state           <= S_RX_SETTLE;
             end
           end else begin
-            if (rst_cnt == '0) begin
-              post_r      <= 1'b0;
-              reset_ack_r <= 1'b0;
-              state       <= S_IDLE;
-            end else begin
-              rst_cnt <= rst_cnt - 1'b1;
+            rst_cnt <= rst_cnt - 1'b1;
+          end
+        end
+
+        S_RX_SETTLE: begin
+          gt_all_reset_r <= 1'b0;
+          if (rst_cnt == '0) begin
+            reset_ack_r <= 1'b0;
+            if (GT_ESC_AFTER != 0) begin
+              if (fail_run_r >= 8'(GT_ESC_AFTER - 1)) fail_run_r <= '0;
+              else                                    fail_run_r <= fail_run_r + 8'd1;
             end
+            esc_phase_r <= (PLL_ESC_EVERY == 0) ? 8'd0
+                         : ((esc_phase_r >= 8'(PLL_ESC_EVERY - 1)) ? 8'd0 : esc_phase_r + 8'd1);
+            state       <= S_IDLE;
+          end else begin
+            rst_cnt <= rst_cnt - 1'b1;
           end
         end
 
@@ -222,7 +315,13 @@ module dcmac_mac_ctl_fsm #(
   assign ctl_tx_send_rfi     = ctl_tx_send_rfi_r;
 
   assign rx_datapath_reset   = rx_dp_reset_r;
-  assign rx_datapath_reset_ports = rx_datapath_reset ? port_group_mask : '0;
+  assign rx_pll_datapath_reset = rx_pll_dp_reset_r;
+  assign gt_all_reset_req      = gt_all_reset_r;
+  assign rx_serdes_reset_req = rx_serdes_req_r;
+  assign rx_flush_req        = rx_flush_req_r;
+  assign rx_datapath_reset_ports = (rx_dp_reset_r || rx_pll_dp_reset_r) ? port_group_mask : '0;
+  assign repair_count        = repair_cnt_r;
+  assign repair_tmo_count    = repair_tmo_cnt_r;
 
   assign tx_rst_seg          = tx_rst_r;
   assign link_up             = (state == S_XFER);

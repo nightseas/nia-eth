@@ -29,9 +29,11 @@ ANCHOR = int(os.environ.get("ANCHOR", "0"))
 PORT_MAX = int(os.environ.get("PORT_MAX", "6"))
 
 S_IDLE, S_WAIT_ALIGN, S_XFER, S_RX_RESET = 0, 2, 3, 4
-NAMES = {S_IDLE: "IDLE", S_WAIT_ALIGN: "WAIT_LINK", S_XFER: "LINK_UP", S_RX_RESET: "RESET_LINK"}
+S_RX_DONE, S_RX_FLUSH, S_RX_SETTLE = 5, 6, 7
+NAMES = {S_IDLE: "IDLE", S_WAIT_ALIGN: "WAIT_LINK", S_XFER: "LINK_UP", S_RX_RESET: "RESET_LINK",
+         S_RX_DONE: "RESET_WAIT_DONE", S_RX_FLUSH: "RESET_FLUSH", S_RX_SETTLE: "RESET_SETTLE"}
 
-RESET_CYC = (T_RXDP_MS + T_SERDES_MS) * CYC_PER_MS + 16
+RESET_CYC = (T_RXDP_MS + 3 * T_SERDES_MS) * CYC_PER_MS + 64
 WIDE_CYC = RESET_CYC
 NARROW_CYC = RESET_CYC
 
@@ -265,13 +267,14 @@ async def test_reset_is_real_assert_hold_release(dut):
         f"(T_RXDP_MS={T_RXDP_MS} x CYC_PER_MS={CYC_PER_MS})"
     )
     settle = 0
-    while int(dut.fsm_state.value) == S_RX_RESET and settle < 4 * RESET_CYC:
+    while int(dut.fsm_state.value) != S_IDLE and settle < 8 * RESET_CYC:
         await RisingEdge(dut.seg_clk)
         settle += 1
     expect2 = T_SERDES_MS * CYC_PER_MS
-    assert abs(settle - expect2) <= 4, (
-        f"the post-release settle was {settle} cycles, expected {expect2} "
-        f"(T_SERDES_MS={T_SERDES_MS}). The first implementation had ~2 cycles here."
+    assert settle >= expect2, (
+        f"the repair took {settle} cycles from the release of the datapath reset to IDLE, "
+        f"expected at least the settle of {expect2} cycles (T_SERDES_MS={T_SERDES_MS}). "
+        "The first implementation had ~2 cycles here."
     )
     assert w.rx == 1, f"expected exactly one reset pulse, saw {w.rx}"
 

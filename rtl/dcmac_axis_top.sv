@@ -153,9 +153,23 @@ module dcmac_axis_top #(
   wire                port_rx_dp_reset, port_tx_dp_reset, port_core_serdes_reset;
   wire [PORT_MAX-1:0] port_rx_dp_reset_ports;
 
+  wire                seq_rx_dp_reset;
+  wire [PORT_MAX-1:0] seq_rx_dp_ports;
+  wire                port_rx_pll_dp_reset;
+  wire                port_gt_all_reset;
+  wire                port_rx_serdes_reset;
+  wire                port_rx_flush;
+  wire                gt_rx_done_seg;
+  wire                seg_rstn_ctl_i;
+
   wire fsm_link_up_seam, fsm_tx_rst_seg_seam, rx_pcs_aligned_top;
 
   wire [7:0] gt_tx_reset_done_raw, gt_rx_reset_done_raw;
+
+  dcmac_sync2 #(.WIDTH(1), .STAGES(2), .INIT('0)) u_sync_gt_rx_done_seg (
+    .clk  (seg_clk_i),
+    .din  (|gt_rx_reset_done_raw),
+    .dout (gt_rx_done_seg));
   wire [7:0] gt_tx_reset_done, gt_rx_reset_done;
 
   dcmac_sync2 #(.WIDTH(8), .STAGES(2), .INIT(8'h00)) u_sync_gt_tx_done (
@@ -205,7 +219,7 @@ module dcmac_axis_top #(
 
     .sys_reset               (sys_reset),
     .seg_clk                 (seg_clk_i),
-    .seg_rstn                (seg_rstn_i[0]),
+    .seg_rstn                (seg_rstn_ctl_i),
     .usr_clk                 (usr_clk_i),
 
     .tx_clk                  (tx_clk),
@@ -304,6 +318,13 @@ module dcmac_axis_top #(
     .ctl_tx_send_lfi             (ctl_tx_send_lfi),
     .ctl_tx_send_rfi             (ctl_tx_send_rfi),
     .fsm_rx_datapath_reset       (port_rx_dp_reset),
+    .fsm_rx_pll_datapath_reset   (port_rx_pll_dp_reset),
+    .fsm_gt_all_reset            (port_gt_all_reset),
+    .fsm_rx_serdes_reset         (port_rx_serdes_reset),
+    .fsm_rx_flush                (port_rx_flush),
+    .fsm_gt_rx_done              (gt_rx_done_seg),
+    .fsm_repair_count            (),
+    .fsm_repair_tmo_count        (),
     .fsm_rx_datapath_reset_ports (port_rx_dp_reset_ports),
     .host_link_reset_req         (host_rx_req_gated),
     .host_rx_force_resync_req    (ctl_rx_force_resync_req),
@@ -328,8 +349,8 @@ module dcmac_axis_top #(
 
     .gt_tx_reset_done        (gt_tx_reset_done),
     .gt_rx_reset_done        (gt_rx_reset_done),
-    .rx_datapath_reset       (),
-    .rx_datapath_reset_ports (),
+    .rx_datapath_reset       (seq_rx_dp_reset),
+    .rx_datapath_reset_ports (seq_rx_dp_ports),
     .core_serdes_reset       (port_core_serdes_reset),
     .tx_datapath_reset       (),
 
@@ -371,6 +392,11 @@ module dcmac_axis_top #(
 
   assign port_tx_dp_reset = ctl_tx_datapath_reset_req;
 
+  localparam logic [PORT_MAX-1:0] GROUP_MASK = ((PORT_MAX)'((1 << NPORTS) - 1)) << ANCHOR;
+  wire [PORT_MAX-1:0] seq_rx_hit      = seq_rx_dp_ports & GROUP_MASK;
+  wire                phy_rx_dp_reset = port_rx_dp_reset | (seq_rx_dp_reset & (|seq_rx_hit));
+  wire [PORT_MAX-1:0] phy_rx_dp_ports = port_rx_dp_reset_ports | seq_rx_hit;
+
   dcmac_phy #(
     .N_CLIENT(1),
     .N_SEG(N_SEG), .SEG_W(SEG_W), .PORT_MAX(PORT_MAX),
@@ -389,6 +415,7 @@ module dcmac_axis_top #(
 
     .seg_clk                 (seg_clk_i),
     .seg_rstn                (seg_rstn_i),
+    .seg_rstn_ctl            (seg_rstn_ctl_i),
     .usr_clk                 (usr_clk_i),
 
     .rx_seg_valid            (rx_seg_valid),
@@ -415,8 +442,12 @@ module dcmac_axis_top #(
     .ctl_tx_send_lfi         (ctl_tx_send_lfi),
     .ctl_tx_send_rfi         (ctl_tx_send_rfi),
 
-    .rx_datapath_reset       (port_rx_dp_reset),
-    .rx_datapath_reset_ports (port_rx_dp_reset_ports),
+    .rx_datapath_reset       (phy_rx_dp_reset),
+    .rx_pll_datapath_reset   (port_rx_pll_dp_reset),
+    .gt_all_reset            (port_gt_all_reset),
+    .rx_serdes_reset_req     (port_rx_serdes_reset),
+    .rx_flush_req            (port_rx_flush),
+    .rx_datapath_reset_ports (phy_rx_dp_ports),
     .tx_datapath_reset       (port_tx_dp_reset),
 
     .axil_aclk               (usr_clk_i),

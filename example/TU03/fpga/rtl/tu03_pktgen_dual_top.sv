@@ -72,6 +72,21 @@ module tu03_pktgen_dual_top #(
   wire [1:0]  ctl_rx_pcs_aligned;
   wire [31:0] ctl_rx_phy_status;
   wire [31:0] ctl_stat_rd_data;
+  wire [63:0] ctl_align_word;
+  wire [63:0] ctl_align_sticky;
+  wire [7:0]  ctl_fault_nibble;
+  wire [1:0]  ctl_bus_stuck;
+  wire [1:0]  ctl_link_valid;
+  wire [1:0]  ctl_ever_aligned;
+  wire [1:0]  ctl_window_running;
+  wire [1:0]  ctl_last_was_fault;
+  wire [31:0] ctl_sample_count;
+  wire [31:0] ctl_esc_count;
+  wire [31:0] ctl_bus_err_count;
+  wire [15:0] ctl_exec_tmo_count;
+  wire [15:0] ctl_repair_dp_count;
+  wire [15:0] ctl_repair_pll_count;
+  wire [1:0]  ctl_gt_rx_done;
   wire [7:0]  ctl_retry_cnt;
   wire [4:0]  ctl_seq_state;
   wire [15:0] ctl_seq_pc;
@@ -140,6 +155,18 @@ module tu03_pktgen_dual_top #(
           6'h05: cmd_rdata_r <= {24'd0, ctl_retry_cnt};
           6'h06: cmd_rdata_r <= ctl_stat_rd_data;
           6'h07: cmd_rdata_r <= {26'd0, ctl_mac_fsm_state};
+          6'h08: cmd_rdata_r <= ctl_align_word[31:0];
+          6'h09: cmd_rdata_r <= ctl_align_word[63:32];
+          6'h0A: cmd_rdata_r <= ctl_align_sticky[31:0];
+          6'h0B: cmd_rdata_r <= ctl_align_sticky[63:32];
+          6'h0C: cmd_rdata_r <= {12'd0, ctl_gt_rx_done, ctl_last_was_fault,
+                                 ctl_window_running, ctl_ever_aligned, ctl_link_valid,
+                                 ctl_bus_stuck, ctl_fault_nibble};
+          6'h0D: cmd_rdata_r <= ctl_sample_count;
+          6'h0E: cmd_rdata_r <= ctl_esc_count;
+          6'h0F: cmd_rdata_r <= ctl_bus_err_count;
+          6'h10: cmd_rdata_r <= {16'd0, ctl_exec_tmo_count};
+          6'h11: cmd_rdata_r <= {ctl_repair_pll_count, ctl_repair_dp_count};
           default: cmd_rdata_r <= 32'd0;
         endcase
       end else if (cmd_rvalid_r && host_rready) begin
@@ -209,6 +236,21 @@ module tu03_pktgen_dual_top #(
     .ctl_seq_pc                (ctl_seq_pc),
     .ctl_stat_rd_idx           (cmd_stat_idx_r),
     .ctl_stat_rd_data          (ctl_stat_rd_data),
+    .ctl_align_word            (ctl_align_word),
+    .ctl_align_sticky          (ctl_align_sticky),
+    .ctl_fault_nibble          (ctl_fault_nibble),
+    .ctl_bus_stuck             (ctl_bus_stuck),
+    .ctl_link_valid            (ctl_link_valid),
+    .ctl_ever_aligned          (ctl_ever_aligned),
+    .ctl_window_running        (ctl_window_running),
+    .ctl_last_was_fault        (ctl_last_was_fault),
+    .ctl_sample_count          (ctl_sample_count),
+    .ctl_esc_count             (ctl_esc_count),
+    .ctl_bus_err_count         (ctl_bus_err_count),
+    .ctl_exec_tmo_count        (ctl_exec_tmo_count),
+    .ctl_repair_dp_count       (ctl_repair_dp_count),
+    .ctl_repair_pll_count      (ctl_repair_pll_count),
+    .ctl_gt_rx_done            (ctl_gt_rx_done),
     .ctl_rx_pcs_aligned        (ctl_rx_pcs_aligned),
 
     .pg_awaddr               ({host_awaddr[PG_AW-1:0], host_awaddr[PG_AW-1:0]}),
