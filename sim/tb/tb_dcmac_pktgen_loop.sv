@@ -17,7 +17,9 @@ module tb_dcmac_pktgen_loop #(
   parameter integer N_SEG       = 2,
   parameter integer SEG_W       = 128,
   parameter integer AXIL_ADDR_W = 12,
-  parameter integer STALL_CYC   = 16
+  parameter integer STALL_CYC   = 16,
+  parameter integer LEN_MIN_HW  = 60,
+  parameter integer LEN_MAX_HW  = 9018
 )(
 
   input  wire                      seg_clk,
@@ -89,7 +91,8 @@ module tb_dcmac_pktgen_loop #(
   end
 
   dcmac_seg_pktgen #(
-    .N_SEG(N_SEG), .SEG_W(SEG_W), .AXIL_ADDR_W(AXIL_ADDR_W), .STALL_CYC(STALL_CYC)
+    .N_SEG(N_SEG), .SEG_W(SEG_W), .AXIL_ADDR_W(AXIL_ADDR_W), .STALL_CYC(STALL_CYC),
+    .LEN_MIN_HW(LEN_MIN_HW), .LEN_MAX_HW(LEN_MAX_HW)
   ) u_pktgen (
     .seg_clk       (seg_clk),
     .seg_rstn      (seg_rstn),

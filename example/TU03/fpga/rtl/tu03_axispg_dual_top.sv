@@ -16,7 +16,9 @@ module tu03_axispg_dual_top #(
 
   parameter integer HOST_ADDR_W   = 16,
   parameter integer DATA_W        = 512,
-  parameter integer LOOPBACK_MODE = 0
+  parameter integer LOOPBACK_MODE = 0,
+  parameter integer LEN_MIN_HW    = 64,
+  parameter integer LEN_MAX_HW    = 9018
 )(
 
   input  wire        gt_ref_clk0_p,
@@ -67,7 +69,9 @@ module tu03_axispg_dual_top #(
   fpga_axispg_dual_top #(
     .DATA_W        (DATA_W),
     .LOOPBACK_MODE (LOOPBACK_MODE),
-    .HOST_ADDR_W   (HOST_ADDR_W)
+    .HOST_ADDR_W   (HOST_ADDR_W),
+    .LEN_MIN_HW    (LEN_MIN_HW),
+    .LEN_MAX_HW    (LEN_MAX_HW)
   ) u_instrument (
     .sys_reset       (sys_reset),
 

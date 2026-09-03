@@ -39,6 +39,8 @@ export SEG_W     ?= 128
 export STALL_CYC ?= 16
 export SEG_MHZ   ?= 390
 export AXIL_MHZ  ?= 250
+export LEN_MIN_HW ?= 60
+export LEN_MAX_HW ?= 9018
 
 SEED ?=
 ifneq ($(SEED),)
@@ -51,7 +53,8 @@ ifeq ($(SIM),verilator)
     EXTRA_ARGS += -Wno-WIDTH -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-UNOPTFLAT \
                   -Wno-CASEINCOMPLETE -Wno-LATCH -Wno-UNSIGNED -Wno-CMPCONST \
                   -Wno-SELRANGE -Wno-DECLFILENAME
-    COMPILE_ARGS += -GN_SEG=$(N_SEG) -GSEG_W=$(SEG_W) -GSTALL_CYC=$(STALL_CYC)
+    COMPILE_ARGS += -GN_SEG=$(N_SEG) -GSEG_W=$(SEG_W) -GSTALL_CYC=$(STALL_CYC) \
+                    -GLEN_MIN_HW=$(LEN_MIN_HW) -GLEN_MAX_HW=$(LEN_MAX_HW)
 endif
 
 PLUSARGS += +nia_mon_no_stop

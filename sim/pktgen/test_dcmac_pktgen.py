@@ -22,6 +22,7 @@ N_SEG = int(os.environ.get("N_SEG", "2"))
 SEG_W = int(os.environ.get("SEG_W", "128"))
 STALL_CYC = int(os.environ.get("STALL_CYC", "16"))
 LEN_MIN_HW = int(os.environ.get("LEN_MIN_HW", "60"))
+LEN_MAX_HW = int(os.environ.get("LEN_MAX_HW", "9018"))
 SEG_MHZ = int(os.environ.get("SEG_MHZ", "390"))
 AXIL_MHZ = int(os.environ.get("AXIL_MHZ", "250"))
 
@@ -369,7 +370,7 @@ async def test_fixed_length_loopback_is_byte_exact(dut):
 async def test_random_length_loopback_is_byte_exact(dut):
     bus = await start(dut)
     await link_ready(dut)
-    await configure(bus, 60, 1518, MODE_RAND, 300)
+    await configure(bus, LEN_MIN_HW, LEN_MAX_HW, MODE_RAND, 300)
     await bus.write(R_CTL, CTL_ENABLE)
     assert await run_until(bus, dut, 300), "three hundred frames were not transmitted"
     await wait_quiet(bus, dut)
@@ -381,7 +382,8 @@ async def test_random_length_loopback_is_byte_exact(dut):
     assert rx_bytes == tx_bytes, f"RX_BYTES={rx_bytes} does not match TX_BYTES={tx_bytes}"
     assert int(await bus.read(R_RX_MISMATCH_BEATS)) == 0, "a random length stream mismatched over a clean loop"
     mean = tx_bytes / max(tx_frames, 1)
-    assert 60 <= mean <= 1518, f"the mean frame is {mean:.1f} bytes, outside 60 to 1518"
+    assert LEN_MIN_HW <= mean <= LEN_MAX_HW, \
+        f"the mean frame is {mean:.1f} bytes, outside {LEN_MIN_HW} to {LEN_MAX_HW}"
     dut._log.info("NIA_PKTGEN loopback random frames=%d bytes=%d mean=%.1f B mismatch=0",
                   tx_frames, tx_bytes, mean)
 
@@ -507,6 +509,8 @@ async def test_frame_rate_table(dut):
     bus = await start(dut)
     await link_ready(dut)
     lengths = [LEN_MIN_HW, LEN_MIN_HW + 1, 64, 65, 512, 1518]
+    if LEN_MAX_HW not in lengths:
+        lengths.append(LEN_MAX_HW)
     rows = []
     for length in lengths:
         await configure(bus, length, length, MODE_FIXED, 0)

@@ -15,7 +15,9 @@
 module tu03_pktgen_dual200_top #(
 
   parameter integer HOST_ADDR_W   = 16,
-  parameter integer LOOPBACK_MODE = 0
+  parameter integer LOOPBACK_MODE = 0,
+  parameter integer LEN_MIN_HW    = 60,
+  parameter integer LEN_MAX_HW    = 9018
 )(
 
   input  wire        gt_ref_clk0_p,
@@ -202,6 +204,8 @@ module tu03_pktgen_dual200_top #(
   dcmac_pktgen_dual_top #(
     .PKTGEN_AXIL_AW (PG_AW),
     .LOOPBACK_MODE  (3'(LOOPBACK_MODE)),
+    .LEN_MIN_HW     (LEN_MIN_HW),
+    .LEN_MAX_HW     (LEN_MAX_HW),
     .N_SEG          (4),
     .NPORTS         (2),
     .ANCHOR_0       (0),

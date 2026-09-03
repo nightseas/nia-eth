@@ -81,6 +81,15 @@ proc nia_synth_dir_arg {} {
 }
 set ooc         [expr {[info exists env(NIA_OOC)] ? $env(NIA_OOC) : 0}]
 set loopback    [expr {[info exists env(NIA_LOOPBACK)] ? $env(NIA_LOOPBACK) : 0}]
+set len_min_hw  [expr {[info exists env(NIA_LEN_MIN_HW)] ? $env(NIA_LEN_MIN_HW) : ($pktgen eq "axis" ? 64 : 60)}]
+set len_max_hw  [expr {[info exists env(NIA_LEN_MAX_HW)] ? $env(NIA_LEN_MAX_HW) : 9018}]
+if {$len_max_hw < $len_min_hw || $len_max_hw > 16368} {
+  puts "IMAGE FAIL: NIA_LEN_MAX_HW=$len_max_hw is outside $len_min_hw to 16368. The upper bound is\
+the derived generator chain's own ceiling: num_seg_in_pkt is 10 bits and a frame occupies\
+ceil(len / 16) segments, so 1023 segments is 16368 bytes. sim/gate/gate_seg_sum_saturation.py\
+asserts it."
+  exit 2
+}
 if {$ooc && $rate != 100} {
   puts "IMAGE FAIL: NIA_OOC=1 with NIA_RATE=$rate. The out of context top is fpga_pktgen_top, which\
 is the one-quad 100GAUI-1 instrument: it would bind a 2-segment 4-lane seam to the PHY of a wider\
@@ -235,15 +244,18 @@ read_xdc $xdc_file
 puts "IMAGE TOP $top"
 puts "IMAGE CLIENTS $clients"
 puts "IMAGE LOOPBACK $loopback"
+puts "IMAGE FRAME_LENGTH LEN_MIN_HW=$len_min_hw LEN_MAX_HW=$len_max_hw, excluding the frame check sequence"
 puts "IMAGE STAGE synth"
 if {$ooc} {
   synth_design -top $top -part $part -mode out_of_context \
-    -generic LOOPBACK_MODE=$loopback
+    -generic LOOPBACK_MODE=$loopback \
+    -generic LEN_MIN_HW=$len_min_hw -generic LEN_MAX_HW=$len_max_hw
 } else {
   set d_synth [nia_synth_dir_arg]
   set a_retime [expr {[info exists env(NIA_SYNTH_RETIMING)] && $env(NIA_SYNTH_RETIMING) != 0 ? "-retiming" : ""}]
   puts "IMAGE SYNTH EFFORT directive='$d_synth' retiming='$a_retime'"
-  eval synth_design -top $top -part $part -generic LOOPBACK_MODE=$loopback $d_synth $a_retime
+  eval synth_design -top $top -part $part -generic LOOPBACK_MODE=$loopback \
+    -generic LEN_MIN_HW=$len_min_hw -generic LEN_MAX_HW=$len_max_hw $d_synth $a_retime
 }
 write_checkpoint -force [file join $out_dir post_synth.dcp]
 report_utilization -file [file join $out_dir post_synth_utilization.rpt]

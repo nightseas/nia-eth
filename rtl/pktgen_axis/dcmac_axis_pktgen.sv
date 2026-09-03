@@ -21,7 +21,7 @@ module dcmac_axis_pktgen #(
   parameter integer AXIL_ADDR_W = 12,
   parameter bit     SAME_CLOCK  = 1'b1,
   parameter integer LEN_MIN_HW  = 64,
-  parameter integer LEN_MAX_HW  = 1518,
+  parameter integer LEN_MAX_HW  = 9018,
   parameter [31:0]  MODULE_TYPE = 32'h4E415047,
   parameter [31:0]  MAP_VERSION = 32'h0003_0001
 )(

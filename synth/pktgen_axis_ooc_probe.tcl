@@ -15,6 +15,8 @@ set data_w   [expr {[info exists env(NIA_OOC_DATA_W)] ? $env(NIA_OOC_DATA_W) : 5
 set net_per  [expr {[info exists env(NIA_OOC_NET_PER)] ? $env(NIA_OOC_NET_PER) : 4.000}]
 set axil_per [expr {[info exists env(NIA_OOC_AXIL_PER)] ? $env(NIA_OOC_AXIL_PER) : 4.000}]
 set same_clock [expr {[info exists env(NIA_OOC_SAME_CLOCK)] ? $env(NIA_OOC_SAME_CLOCK) : 1}]
+set len_min_hw [expr {[info exists env(NIA_LEN_MIN_HW)] ? $env(NIA_LEN_MIN_HW) : 64}]
+set len_max_hw [expr {[info exists env(NIA_LEN_MAX_HW)] ? $env(NIA_LEN_MAX_HW) : 9018}]
 
 set here [file normalize [file dirname [info script]]]
 set rtl  [file normalize [file join $here .. rtl]]
@@ -28,7 +30,8 @@ read_verilog -sv [list \
   $rtl/pktgen_axis/dcmac_axis_pktgen.sv ]
 
 synth_design -top dcmac_axis_pktgen -part $part -mode out_of_context \
-             -generic DATA_W=$data_w -generic SAME_CLOCK=$same_clock
+             -generic DATA_W=$data_w -generic SAME_CLOCK=$same_clock \
+             -generic LEN_MIN_HW=$len_min_hw -generic LEN_MAX_HW=$len_max_hw
 
 puts "PROBE_DATA_W=$data_w net_per=$net_per axil_per=$axil_per"
 puts "PROBE_ERRORS=[get_msg_config -severity {ERROR} -count]"

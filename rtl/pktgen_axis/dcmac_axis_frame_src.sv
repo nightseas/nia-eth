@@ -18,7 +18,7 @@ module dcmac_axis_frame_src #(
   parameter integer DATA_W     = 512,
   parameter integer USER_W     = 1,
   parameter integer LEN_MIN_HW = 64,
-  parameter integer LEN_MAX_HW = 1518,
+  parameter integer LEN_MAX_HW = 9018,
   parameter integer HDR_B      = 42
 )(
   input  wire                    clk,
@@ -105,7 +105,8 @@ module dcmac_axis_frame_src #(
     return keep;
   endfunction
 
-  wire [15:0] lo_cfg     = (cfg_len_min < 16'(LEN_MIN_HW)) ? 16'(LEN_MIN_HW) : cfg_len_min;
+  wire [15:0] lo_cfg     = (cfg_len_min < 16'(LEN_MIN_HW)) ? 16'(LEN_MIN_HW) :
+                           (cfg_len_min > 16'(LEN_MAX_HW)) ? 16'(LEN_MAX_HW) : cfg_len_min;
   wire [15:0] hi_cfg     = (cfg_len_max > 16'(LEN_MAX_HW)) ? 16'(LEN_MAX_HW) : cfg_len_max;
   wire [15:0] hi_eff_cfg = (hi_cfg < lo_cfg) ? lo_cfg : hi_cfg;
 

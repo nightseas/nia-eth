@@ -62,7 +62,7 @@ cable serial. The scripts will look for the specific board and program the image
     NIA_LEN_MIN=64 NIA_LEN_MAX=64 NIA_FRAMES=100000 \
       xsdb pktgen_probe.tcl                         # fixed pkt size, send 100K pkt
 
-    NIA_LEN_MODE=1 NIA_LEN_MIN=60 NIA_LEN_MAX=1518 \
+    NIA_LEN_MODE=1 NIA_LEN_MIN=60 NIA_LEN_MAX=9018 \
       xsdb pktgen_probe.tcl                         # send pkt with random size between MIN and MAX
 
     NIA_WINDOW=<address> NIA_POLLS=<count> \
@@ -87,7 +87,7 @@ the first failure. What each step establishes:
 | 1 | reads both generator windows and establishes that they are two instances rather than one aliased twice |
 | 2 | issues the bring-up restart and times the link falling and both links returning |
 | 3 | one clean burst per size in both directions at once, and asserts the transmit counts of one client against the receive counts of the other, with no error frames and no mismatched beats |
-| 4 | the rate table at 64, 65, 128, 256, 512, 1024 and 1518 bytes |
+| 4 | the rate table at 64, 65, 128, 256, 512, 1024, 1518, 4096 and 9018 bytes |
 | 5 | whether the MAC ever back pressured the generator |
 | 6 | one repair command to one group while both directions carry traffic, and what the other group's counters did across it |
 | 7 | that stopping a burst mid-frame dirties the data path, which is why steps 3 and 4 stop on a frame limit |
@@ -95,8 +95,8 @@ the first failure. What each step establishes:
 Test options:
 
     NIA_STEPS="1 2 3 4 5 6"                select test steps to run, in this order
-    NIA_RATE_SIZES="64 65 128 ... 1518"    the sizes of the rate table, seven by default
-    NIA_BURST_SIZES="64 1518"              the sizes of step 3
+    NIA_RATE_SIZES="64 65 128 ... 9018"    the sizes of the rate table, nine by default
+    NIA_BURST_SIZES="64 1518 9018"         the sizes of step 3
     NIA_BURST_BYTES=3000000000             bytes per burst per direction, keep under 4 GB
     NIA_RATE_S=3.0                         burst test duration in seconds per each rate
     NIA_BURST_MS=20000                     the timeout of one burst
@@ -128,7 +128,7 @@ More test options:
     NIA_STEPS="1 2 3 4"          which steps to run, in this order
     NIA_CLIENTS=1                a one client image. Client 1 is never read
     NIA_SIZES="64 65 128 ..."    the sizes of the rate table
-    NIA_EQ_SIZES="64 1518"       the sizes of step 3
+    NIA_EQ_SIZES="64 1518 9018"  the sizes of step 3
     NIA_EQ_BYTES=3000000000      bytes per burst per direction in step 3, keep under 4 GB
     NIA_WARMUP_BYTES=100000000   bytes per direction in the discarded warm-up burst
     NIA_RATE_S=3.0               seconds per rate burst
@@ -142,7 +142,7 @@ At 400GAUI-4 the there is only one pktgen client for port 0, so `NIA_CLIENTS=1` 
 
 #### Packet size sweeping test
 
-`sweep_twoboard.sh` sweeps every frame length (pkt size) from `NIA_IMIN` to `NIA_IMAX` inclusive, one burst per pkt size, and writes a per pkt size verdict table beside the log.
+`sweep_twoboard.sh` sweeps the frame length (pkt size) from `NIA_IMIN` to `NIA_IMAX` inclusive, one burst per pkt size, and writes a per pkt size verdict table beside the log.
 
     source <path to Vivado or Vivado Lab>/settings64.sh
     cd example/TU03/hw_twoboard
@@ -155,7 +155,7 @@ At 400GAUI-4 the there is only one pktgen client for port 0, so `NIA_CLIENTS=1` 
     SERIAL_A=<serial> SERIAL_B=<serial> NIA_CLIENTS=1 \
       ./sweep_twoboard.sh ../../../build/image/tu03_pktgen_400g_top.pdi
 
-The default `NIA_IMAX` is 1518 and `NIA_EQ_BYTES` is 15000000. The test will prints `SWEEP RESULT PASS`
+The default `NIA_IMAX` is 9018 and `NIA_EQ_BYTES` is 15000000. The test will prints `SWEEP RESULT PASS`
 only when every pkt size has exact same RX bytes comparing to TX bytes.
 
 `SERIAL_A` and `SERIAL_B` are required and must differ.

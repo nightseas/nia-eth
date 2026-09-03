@@ -17,7 +17,7 @@ module tb_dcmac_axis_pktgen_seam #(
   parameter integer DATA_W      = 512,
   parameter integer AXIL_ADDR_W = 12,
   parameter integer LEN_MIN_HW  = 64,
-  parameter integer LEN_MAX_HW  = 1518,
+  parameter integer LEN_MAX_HW  = 9018,
   parameter integer N_SEG       = 2,
   parameter integer SEG_W       = 128,
   parameter integer PACK_LOOP   = 0

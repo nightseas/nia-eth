@@ -22,7 +22,9 @@ BIN="${NIA_VIVADO_BIN:-vivado}"
 SERIAL_A="${SERIAL_A:-}"
 SERIAL_B="${SERIAL_B:-}"
 IMIN="${NIA_IMIN:-64}"
-IMAX="${NIA_IMAX:-1518}"
+IMAX="${NIA_IMAX:-9018}"
+IDENSE="${NIA_IDENSE:-1518}"
+ISTEP_HI="${NIA_ISTEP_HI:-97}"
 EQ_BYTES="${NIA_EQ_BYTES:-15000000}"
 BURST_MS="${NIA_BURST_MS:-60000}"
 CLIENTS="${NIA_CLIENTS:-2}"
@@ -34,7 +36,14 @@ sweep_twoboard.sh <image.pdi> [label]
 
   NIA_CLIENTS   cages the image carries, 2 for a dual image and 1 for 400G. Default 2
   NIA_IMIN      first frame length, default 64
-  NIA_IMAX      last frame length inclusive, default 1518, the LEN_MAX_HW of every image
+  NIA_IMAX      last frame length inclusive, default 9018, the LEN_MAX_HW of every image
+  NIA_IDENSE    last length of the dense band, default 1518. Every integer length from
+                NIA_IMIN to NIA_IDENSE is covered, because the payload fusion defect this
+                sweep exists to catch is a function of len mod 32 and only a dense band
+                proves every tail. Above NIA_IDENSE the sweep steps by NIA_ISTEP_HI
+  NIA_ISTEP_HI  stride above the dense band, default 97. It is prime, so it is coprime with
+                the 16 byte segment and the 64 byte stream beat and still visits every
+                len mod 16, len mod 32 and len mod 64 class. NIA_IMAX is always included
   NIA_EQ_BYTES  bytes per length per cage, default 15000000. The wire test's own default
                 is 3000000000, which over a full sweep is terabytes, so this lowers it to
                 one short burst per length
@@ -69,8 +78,12 @@ mkdir -p "$RUN"
 LOG="$RUN/sweep.log"
 
 sizes=""
-for ((i = IMIN; i <= IMAX; i++)); do sizes="$sizes $i"; done
-n_sizes=$(( IMAX - IMIN + 1 ))
+dense_end=$IDENSE
+[ "$dense_end" -gt "$IMAX" ] && dense_end=$IMAX
+for ((i = IMIN; i <= dense_end; i++)); do sizes="$sizes $i"; done
+for ((i = dense_end + ISTEP_HI; i <= IMAX; i += ISTEP_HI)); do sizes="$sizes $i"; done
+case " $sizes " in *" $IMAX "*) ;; *) sizes="$sizes $IMAX" ;; esac
+n_sizes=$(printf '%s\n' $sizes | wc -l)
 
 {
 	echo "SWEEP IMAGE   $LABEL"
@@ -78,6 +91,7 @@ n_sizes=$(( IMAX - IMIN + 1 ))
 	echo "SWEEP MD5     $(md5sum "$PDI" | cut -d' ' -f1)"
 	echo "SWEEP BOARDS  A=$SERIAL_A B=$SERIAL_B clients=$CLIENTS"
 	echo "SWEEP LENGTHS $IMIN to $IMAX inclusive, $n_sizes lengths, $EQ_BYTES bytes each"
+	echo "SWEEP BANDS   every integer $IMIN to $dense_end, then step $ISTEP_HI to $IMAX"
 	echo "SWEEP TOOL    $("$BIN" -version 2>/dev/null | head -1)"
 	echo "SWEEP START   $(date -Is)"
 } | tee "$LOG"

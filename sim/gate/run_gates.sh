@@ -48,6 +48,7 @@ for g in \
 	sim/gate/gate_ctl_seq_groups.py \
 	sim/gate/gate_ctl_seq_waits.py \
 	sim/gate/gate_param_overrides.py \
+	sim/gate/gate_seg_sum_saturation.py \
 	sim/gate/preflight_anchors.py
 do
 	if [ -f "$g" ]; then
@@ -55,6 +56,7 @@ do
 		*gate_datapath_owns_no_reset.py) run_gate "$g" rtl ;;
 		*gate_elaborate_sets.py) run_gate "$g" . ;;
 		*gate_ctl_seq_groups.py|*gate_ctl_seq_waits.py|*preflight_anchors.py) run_gate "$g" ;;
+		*gate_seg_sum_saturation.py) run_gate "$g" ;;
 		*) run_gate "$g" "$ROOT" ;;
 		esac
 	else

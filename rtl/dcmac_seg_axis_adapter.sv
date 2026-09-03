@@ -231,28 +231,66 @@ module dcmac_seg_axis_tx #(
       if (|s_axis_tkeep[s*SEG_B +: SEG_B]) last_ena = s[$clog2(N_SEG+1)-1:0];
   end
 
+  logic                   c_valid;
+  logic [N_SEG-1:0]       c_ena;
+  logic [N_SEG-1:0]       c_sop;
+  logic [N_SEG-1:0]       c_eop;
+  logic [N_SEG-1:0]       c_err;
+  logic [N_SEG*4-1:0]     c_mty;
+
   always_comb begin
-    tx_seg_valid = s_axis_tvalid & (|s_axis_tkeep | ~first_beat);
-    tx_seg_dat   = s_axis_tdata;
-    tx_seg_ena   = '0;
-    tx_seg_sop   = '0;
-    tx_seg_eop   = '0;
-    tx_seg_err   = '0;
-    tx_seg_mty   = '0;
+    c_valid = s_axis_tvalid & (|s_axis_tkeep | ~first_beat);
+    c_ena   = '0;
+    c_sop   = '0;
+    c_eop   = '0;
+    c_err   = '0;
+    c_mty   = '0;
     for (int s = 0; s < N_SEG; s++) begin
       logic [SEG_B-1:0] keepseg;
       logic             ena_s, eop_s;
       keepseg      = s_axis_tkeep[s*SEG_B +: SEG_B];
       ena_s        = |keepseg;
       eop_s        = s_axis_tlast & ena_s & (s == int'(last_ena));
-      tx_seg_ena[s] = ena_s;
-      tx_seg_eop[s] = eop_s;
-      tx_seg_sop[s] = first_beat & (s == 0) & ena_s;
-      tx_seg_err[s] = s_axis_tuser & eop_s;
+      c_ena[s]     = ena_s;
+      c_eop[s]     = eop_s;
+      c_sop[s]     = first_beat & (s == 0) & ena_s;
+      c_err[s]     = s_axis_tuser & eop_s;
 
-      tx_seg_mty[s*4 +: 4] = eop_s ? (SEG_B[3:0] - $countones(keepseg)) : 4'd0;
+      c_mty[s*4 +: 4] = eop_s ? (SEG_B[3:0] - $countones(keepseg)) : 4'd0;
     end
   end
+
+  logic                     q_valid;
+  logic [N_SEG*SEG_W-1:0]   q_dat;
+  logic [N_SEG-1:0]         q_ena, q_sop, q_eop, q_err;
+  logic [N_SEG*4-1:0]       q_mty;
+
+  always_ff @(posedge clk) begin
+    if (!rstn) begin
+      q_valid <= 1'b0;
+      q_ena   <= '0;
+      q_sop   <= '0;
+      q_eop   <= '0;
+      q_err   <= '0;
+      q_mty   <= '0;
+    end else if (tx_seg_ready) begin
+      q_valid <= c_valid;
+      q_dat   <= s_axis_tdata;
+      q_ena   <= c_ena;
+      q_sop   <= c_sop;
+      q_eop   <= c_eop;
+      q_err   <= c_err;
+      q_mty   <= c_mty;
+    end
+  end
+
+  assign tx_seg_valid = q_valid;
+  assign tx_seg_dat   = q_dat;
+  assign tx_seg_ena   = q_ena;
+  assign tx_seg_sop   = q_sop;
+  assign tx_seg_eop   = q_eop;
+  assign tx_seg_err   = q_err;
+  assign tx_seg_mty   = q_mty;
 
   assign s_axis_tready = tx_seg_ready;
 endmodule

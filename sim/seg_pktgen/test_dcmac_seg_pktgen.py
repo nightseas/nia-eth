@@ -22,7 +22,7 @@ N_SEG = int(os.environ.get("N_SEG", "2"))
 SEG_W = int(os.environ.get("SEG_W", "128"))
 SEG_B = SEG_W // 8
 LEN_MIN_HW = int(os.environ.get("LEN_MIN_HW", "60"))
-LEN_MAX_HW = int(os.environ.get("LEN_MAX_HW", "1518"))
+LEN_MAX_HW = int(os.environ.get("LEN_MAX_HW", "9018"))
 
 AXIL_NS = 8
 SEG_NS = 2.56
@@ -61,6 +61,7 @@ MAP_VERSION_MAJOR = 3
 FEATURE_HDR = 0x1
 
 PRIME_BEATS = 4000
+JUMBO_BEATS = max(PRIME_BEATS, 24 * ((LEN_MAX_HW + N_SEG * SEG_B - 1) // (N_SEG * SEG_B)))
 
 
 async def quiesce(dut):
@@ -302,10 +303,77 @@ async def test_random_length_stays_in_range_and_contiguous(dut):
 
 
 @cocotb.test()
+async def test_maximum_length_stream_is_contiguous(dut):
+    """The largest frame the instrument is built for, which is the first configuration that enters
+    the derived chain's segment count saturation branch and the first that needs more slices than
+    the generator's deep FIFO holds at N_SEG=2.
+
+    A frame of LEN_MAX_HW bytes occupies ceil(LEN_MAX_HW/16) segments, which is 564 at 9018 bytes.
+    The saturation branch of dcmac_seg_pktgen_chain.sv is taken once a frame needs 256 segments or
+    more, which is any frame above 4080 bytes, so no configuration below that has ever entered it.
+    The deep slice FIFO is 256 entries deep with a programmable full threshold of 128, so at
+    N_SEG=2 one frame of 282 slices asserts o_af in the middle of itself and the generator must
+    resume the same frame rather than restart or drop it. Contiguity of the payload counter across
+    frame boundaries is what says it did.
+    """
+    await start(dut)
+    await wr(dut, A_LEN_MIN, LEN_MAX_HW)
+    await wr(dut, A_LEN_MAX, LEN_MAX_HW)
+    await wr(dut, A_CTL, CTL_ENABLE)
+    frames, beats = await collect(dut, JUMBO_BEATS)
+    assert len(frames) >= 4, f"only {len(frames)} frame(s) were produced at {LEN_MAX_HW} bytes"
+    for f in frames:
+        assert len(f) == LEN_MAX_HW, f"a frame is {len(f)} bytes, expected {LEN_MAX_HW}"
+    n = assert_contiguous(frames, f"fixed {LEN_MAX_HW}")
+    status = await rd(dut, A_STATUS)
+    assert not (status & ST_UNDERFLOW), "the client bus underflowed"
+    assert not (status & ST_OVERFLOW), "the generator overflowed its buffer"
+    dut._log.info("NIA_SEG_PKTGEN fixed %d B frames=%d beats=%d stream_bytes=%d contiguous",
+                  LEN_MAX_HW, len(frames), beats, n)
+    await quiesce(dut)
+
+
+@cocotb.test()
+async def test_length_across_the_saturation_threshold_is_contiguous(dut):
+    """Frames on both sides of the 256 segment saturation threshold, interleaved.
+
+    The threshold is 4080 bytes: at or below it a frame needs at most 255 segments and the guard
+    stays inactive, above it the guard saturates. The accumulations the guard protects are shared
+    across three consecutive frames, so a stream that mixes the two cases is what exercises the
+    guard rather than one that sits on one side of it. gate_seg_sum_saturation.py proves the guard
+    is complete for the configured ceiling; this test is the dynamic counterpart.
+    """
+    if LEN_MAX_HW <= 4080:
+        raise cocotb.result.TestSuccess(
+            f"LEN_MAX_HW is {LEN_MAX_HW} and the saturation threshold is 4080, so this "
+            f"configuration cannot reach it")
+    await start(dut)
+    await wr(dut, A_LEN_MIN, LEN_MIN_HW)
+    await wr(dut, A_LEN_MAX, LEN_MAX_HW)
+    await wr(dut, A_LEN_MODE, LEN_MODE_RANDOM)
+    await wr(dut, A_CTL, CTL_ENABLE)
+    frames, beats = await collect(dut, JUMBO_BEATS)
+    assert len(frames) >= 8, f"only {len(frames)} frame(s) were produced"
+    lens = [len(f) for f in frames]
+    for v in lens:
+        assert LEN_MIN_HW <= v <= LEN_MAX_HW, \
+            f"a frame is {v} bytes, outside {LEN_MIN_HW} to {LEN_MAX_HW}"
+    assert_contiguous(frames, f"random {LEN_MIN_HW}..{LEN_MAX_HW}")
+    below = sum(1 for v in lens if v <= 4080)
+    above = len(lens) - below
+    dut._log.info("NIA_SEG_PKTGEN random %d..%d frames=%d beats=%d at_or_below_4080=%d above=%d",
+                  LEN_MIN_HW, LEN_MAX_HW, len(frames), beats, below, above)
+    assert above > 0, \
+        f"no frame exceeded 4080 bytes in {len(frames)} frame(s), so the saturation branch was " \
+        f"never entered and this test is vacuous"
+    await quiesce(dut)
+
+
+@cocotb.test()
 async def test_segment_layout_obeys_the_client_rules(dut):
     await start(dut)
     await wr(dut, A_LEN_MIN, 60)
-    await wr(dut, A_LEN_MAX, 1518)
+    await wr(dut, A_LEN_MAX, LEN_MAX_HW)
     await wr(dut, A_LEN_MODE, LEN_MODE_RANDOM)
     await wr(dut, A_CTL, CTL_ENABLE)
     beats = 0
@@ -382,7 +450,7 @@ async def test_limit_stops_the_stream(dut):
 async def test_no_idle_beat_at_full_rate(dut):
     await start(dut)
     await wr(dut, A_LEN_MIN, 60)
-    await wr(dut, A_LEN_MAX, 1518)
+    await wr(dut, A_LEN_MAX, LEN_MAX_HW)
     await wr(dut, A_LEN_MODE, LEN_MODE_RANDOM)
     await wr(dut, A_CTL, CTL_ENABLE)
     for _ in range(PRIME_BEATS):

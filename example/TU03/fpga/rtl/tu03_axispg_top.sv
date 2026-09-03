@@ -17,7 +17,9 @@ module tu03_axispg_top #(
 
   parameter integer HOST_ADDR_W   = 16,
   parameter integer DATA_W        = 512,
-  parameter integer LOOPBACK_MODE = 0
+  parameter integer LOOPBACK_MODE = 0,
+  parameter integer LEN_MIN_HW    = 64,
+  parameter integer LEN_MAX_HW    = 9018
 )(
 
   input  wire        gt_ref_clk_p,
@@ -205,7 +207,8 @@ module tu03_axispg_top #(
   wire                rx_tvalid, rx_tlast, rx_tuser;
 
   dcmac_axis_pktgen #(
-    .DATA_W(DATA_W), .AXIL_ADDR_W(PG_AW)
+    .DATA_W(DATA_W), .AXIL_ADDR_W(PG_AW),
+    .LEN_MIN_HW(LEN_MIN_HW), .LEN_MAX_HW(LEN_MAX_HW)
   ) u_pktgen (
     .net_clk          (usr_clk),
     .net_rstn         (usr_rstn),

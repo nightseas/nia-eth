@@ -23,7 +23,9 @@ module fpga_pktgen_top #(
   parameter integer LOOPBACK_MODE = 0,
   parameter integer HOST_ADDR_W  = 16,
   parameter integer PKTGEN_BASE  = 16'h0000,
-  parameter integer COMMAND_BASE = 16'h1000
+  parameter integer COMMAND_BASE = 16'h1000,
+  parameter integer LEN_MIN_HW   = 60,
+  parameter integer LEN_MAX_HW   = 9018
 )(
 
   input  wire                    sys_reset,
@@ -155,7 +157,8 @@ module fpga_pktgen_top #(
   dcmac_pktgen_top #(
     .N_SEG(N_SEG), .SEG_W(SEG_W), .PORT_MAX(PORT_MAX),
     .NPORTS(NPORTS), .ANCHOR(ANCHOR), .PKTGEN_AXIL_AW(PG_AW),
-    .LOOPBACK_MODE(3'(LOOPBACK_MODE))
+    .LOOPBACK_MODE(3'(LOOPBACK_MODE)),
+    .LEN_MIN_HW(LEN_MIN_HW), .LEN_MAX_HW(LEN_MAX_HW)
   ) u_seam (
     .sys_reset               (sys_reset),
 

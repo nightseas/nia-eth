@@ -16,6 +16,8 @@ set part       [expr {[info exists env(NIA_PART)] ? $env(NIA_PART) : "xcvp1552-v
 set out_dir    [expr {[info exists env(NIA_OUT)] ? $env(NIA_OUT) : [file join $nia_root build seg_pktgen]}]
 set n_seg      [expr {[info exists env(NIA_N_SEG)] ? $env(NIA_N_SEG) : 2}]
 set seg_w      [expr {[info exists env(NIA_SEG_W)] ? $env(NIA_SEG_W) : 128}]
+set len_min_hw [expr {[info exists env(NIA_LEN_MIN_HW)] ? $env(NIA_LEN_MIN_HW) : 60}]
+set len_max_hw [expr {[info exists env(NIA_LEN_MAX_HW)] ? $env(NIA_LEN_MAX_HW) : 9018}]
 set jobs       [expr {[info exists env(NIA_JOBS)] ? $env(NIA_JOBS) : 16}]
 
 file mkdir $out_dir
@@ -51,7 +53,8 @@ read_xdc $xdc
 
 puts "SEGPKTGEN STAGE synth"
 synth_design -top dcmac_seg_pktgen -part $part -mode out_of_context \
-  -generic N_SEG=$n_seg -generic SEG_W=$seg_w
+  -generic N_SEG=$n_seg -generic SEG_W=$seg_w \
+  -generic LEN_MIN_HW=$len_min_hw -generic LEN_MAX_HW=$len_max_hw
 report_utilization -file [file join $out_dir post_synth_utilization.rpt]
 report_timing_summary -file [file join $out_dir post_synth_timing_summary.rpt]
 

@@ -36,7 +36,9 @@ module dcmac_pktgen_dual_top #(
   parameter integer T_SERDES_MS    = 100,
   parameter integer LINK_WDT_MS    = 750,
   parameter integer T_SAMPLE_MS    = 50,
-  parameter integer PKTGEN_AXIL_AW = 12
+  parameter integer PKTGEN_AXIL_AW = 12,
+  parameter integer LEN_MIN_HW     = 60,
+  parameter integer LEN_MAX_HW     = 9018
 )(
 
   input  wire                    sys_reset,
@@ -347,7 +349,8 @@ module dcmac_pktgen_dual_top #(
   generate
   for (q = 0; q < N_CLIENT; q++) begin : g_pktgen
     dcmac_seg_pktgen #(
-      .N_SEG(N_SEG), .SEG_W(SEG_W), .AXIL_ADDR_W(PKTGEN_AXIL_AW)
+      .N_SEG(N_SEG), .SEG_W(SEG_W), .AXIL_ADDR_W(PKTGEN_AXIL_AW),
+      .LEN_MIN_HW(LEN_MIN_HW), .LEN_MAX_HW(LEN_MAX_HW)
     ) u_pktgen (
       .seg_clk       (seg_clk_i),
       .seg_rstn      (seg_rstn_i[q]),

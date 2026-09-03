@@ -18,7 +18,7 @@ module dcmac_seg_pktgen #(
   parameter integer SEG_W       = 128,
   parameter integer AXIL_ADDR_W = 12,
   parameter integer LEN_MIN_HW  = 60,
-  parameter integer LEN_MAX_HW  = 1518,
+  parameter integer LEN_MAX_HW  = 9018,
   parameter integer STALL_CYC   = 1024,
   parameter [31:0]  MODULE_TYPE = 32'h4E535047,
   parameter [31:0]  MAP_VERSION = 32'h0003_0001
@@ -553,7 +553,7 @@ module dcmac_seg_pktgen_tx #(
   parameter int N_SEG        = 2,
   parameter int SEG_W        = 128,
   parameter int LEN_MIN_HW   = 60,
-  parameter int LEN_MAX_HW   = 1518,
+  parameter int LEN_MAX_HW   = 9018,
   parameter int STALL_CYC    = 1024,
   parameter int NUM_ID       = 6,
   parameter int IDLE_DONE    = 16,

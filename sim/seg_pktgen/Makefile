@@ -36,7 +36,7 @@ export PYTHONPATH := $(HERE):$(HERE)/..:$(PYTHONPATH)
 N_SEG ?= 2
 SEG_W ?= 128
 LEN_MIN_HW ?= 60
-LEN_MAX_HW ?= 1518
+LEN_MAX_HW ?= 9018
 export N_SEG
 export SEG_W
 export LEN_MIN_HW
@@ -61,11 +61,16 @@ COCOTB_HDL_TIMEPRECISION ?= 1ps
 
 include $(shell cocotb-config --makefiles)/Makefile.sim
 
-.PHONY: quad lint
+.PHONY: quad lint legacy
 quad:
 	$(MAKE) -f $(THIS_MK) N_SEG=4
+
+legacy:
+	$(MAKE) -f $(THIS_MK) LEN_MAX_HW=1518
 
 lint:
 	verilator --lint-only -sv --timing -Wall -Wno-DECLFILENAME -Wno-VARHIDDEN \
 	  -Wno-UNUSEDSIGNAL -Wno-SYNCASYNCNET -Wno-UNUSEDPARAM \
-	  -GN_SEG=$(N_SEG) -GSEG_W=$(SEG_W) --top-module dcmac_seg_pktgen $(VERILOG_SOURCES)
+	  -GN_SEG=$(N_SEG) -GSEG_W=$(SEG_W) \
+	  -GLEN_MIN_HW=$(LEN_MIN_HW) -GLEN_MAX_HW=$(LEN_MAX_HW) \
+	  --top-module dcmac_seg_pktgen $(VERILOG_SOURCES)

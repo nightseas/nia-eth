@@ -21,6 +21,8 @@ from cocotb.triggers import ClockCycles, RisingEdge
 
 DATA_W = int(os.environ.get("DATA_W", "512"))
 KEEP_W = DATA_W // 8
+LEN_MIN_HW = int(os.environ.get("LEN_MIN_HW", "64"))
+LEN_MAX_HW = int(os.environ.get("LEN_MAX_HW", "9018"))
 
 A_MODULE_TYPE = 0x00
 A_MAP_VERSION = 0x04
@@ -188,12 +190,18 @@ async def test_byte_exact_min_frame(dut):
 @cocotb.test()
 async def test_byte_exact_multi_beat(dut):
     await start(dut)
-    for length in (65, 128, 512, 1518):
+    lengths = [65, 128, 512, 1518]
+    for extra in (4096, LEN_MAX_HW - 1, LEN_MAX_HW):
+        if LEN_MIN_HW <= extra <= LEN_MAX_HW and extra not in lengths:
+            lengths.append(extra)
+    for length in lengths:
         c = await run_burst(dut, length, 40)
         assert c["txf"] == 40 and c["rxf"] == 40, f"len {length}: frames {c['txf']}/{c['rxf']}"
         assert c["txb"] == 40 * length, f"len {length}: TX_BYTES {c['txb']}"
         assert c["rxb"] == 40 * length, f"len {length}: RX_BYTES {c['rxb']}"
         assert c["mis"] == 0, f"len {length}: mismatch {c['mis']}"
+        assert c["err"] == 0, f"len {length}: RX_ERR_FRAMES {c['err']}"
+        assert c["len"] == length, f"len {length}: LEN_EFFECTIVE {c['len']}"
 
 
 @cocotb.test()
@@ -248,6 +256,23 @@ async def test_minimum_frame_is_clamped(dut):
     assert c["clamp"] == 1, "the clamp is not sticky"
     assert c["txb"] == 20 * 64, f"TX_BYTES {c['txb']}"
     assert c["mis"] == 0, f"mismatch {c['mis']}"
+
+
+@cocotb.test()
+async def test_maximum_frame_is_clamped(dut):
+    """The counterpart of test_minimum_frame_is_clamped. LEN_MAX_HW is what the instrument was
+    built for, and a longer request must be clamped to it in hardware and reported as clamped
+    rather than truncated on the wire or wrapped in a counter."""
+    await start(dut)
+    c = await run_burst(dut, LEN_MAX_HW + 1000, 20)
+    assert c["len"] == LEN_MAX_HW, \
+        f"a {LEN_MAX_HW + 1000} byte request produced LEN_EFFECTIVE {c['len']}"
+    assert c["clamp"] == 1, "the clamp is not sticky"
+    assert c["txf"] == 20 and c["rxf"] == 20, f"frames {c['txf']}/{c['rxf']}"
+    assert c["txb"] == 20 * LEN_MAX_HW, f"TX_BYTES {c['txb']}"
+    assert c["rxb"] == 20 * LEN_MAX_HW, f"RX_BYTES {c['rxb']}"
+    assert c["mis"] == 0, f"mismatch {c['mis']}"
+    assert c["err"] == 0, f"RX_ERR_FRAMES {c['err']}"
 
 
 @cocotb.test()

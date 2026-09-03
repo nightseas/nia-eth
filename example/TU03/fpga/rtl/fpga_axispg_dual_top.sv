@@ -18,7 +18,9 @@ module fpga_axispg_dual_top #(
   parameter integer DATA_W        = 512,
   parameter integer LOOPBACK_MODE = 0,
   parameter integer HOST_ADDR_W   = 16,
-  parameter integer PG_AW         = 12
+  parameter integer PG_AW         = 12,
+  parameter integer LEN_MIN_HW    = 64,
+  parameter integer LEN_MAX_HW    = 9018
 )(
 
   input  wire                    sys_reset,
@@ -214,7 +216,8 @@ module fpga_axispg_dual_top #(
   generate
   for (q = 0; q < N_CLIENT; q++) begin : g_pktgen
     dcmac_axis_pktgen #(
-      .DATA_W(DATA_W), .AXIL_ADDR_W(PG_AW)
+      .DATA_W(DATA_W), .AXIL_ADDR_W(PG_AW),
+      .LEN_MIN_HW(LEN_MIN_HW), .LEN_MAX_HW(LEN_MAX_HW)
     ) u_pktgen (
       .net_clk          (usr_clk_i),
       .net_rstn         (usr_rstn_i),

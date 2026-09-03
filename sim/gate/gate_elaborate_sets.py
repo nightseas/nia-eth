@@ -18,8 +18,9 @@ import sys
 from pathlib import Path
 
 VAR = re.compile(r"\$\((\w+)\)")
-ASSIGN = re.compile(r"^\s*(\w+)\s*(?::=|\?=|=)\s*(.*?)\s*$")
+ASSIGN = re.compile(r"^\s*(\w+)\s*(\+=|:=|\?=|=)\s*(.*?)\s*$")
 SHELL_PWD = re.compile(r"\$\(shell\s+pwd\)")
+GENERIC = re.compile(r"^-G\w+=[^\s$]+$")
 
 
 def parse_makefile(path):
@@ -39,12 +40,15 @@ def parse_makefile(path):
     for line in joined:
         if line.lstrip().startswith("#"):
             continue
+        line = re.sub(r"^\s*export\s+", "", line)
         m = ASSIGN.match(line)
         if m:
-            name, value = m.group(1), m.group(2)
+            name, op, value = m.group(1), m.group(2), m.group(3)
             if name.endswith("VERILOG_SOURCES") or name == "VERILOG_SOURCES":
                 lines.append(value)
                 vars_.setdefault("VERILOG_SOURCES", value)
+            elif op == "+=":
+                vars_[name] = (vars_.get(name, "") + " " + value).strip()
             else:
                 vars_[name] = value
     return vars_
@@ -72,7 +76,7 @@ def sources_of(path):
         vars_[name] = str(here)
     src = vars_.get("VERILOG_SOURCES", "")
     if not src:
-        return None, None, None
+        return None, None, None, None
     files = []
     for tok in expand(src, vars_, here).split():
         if tok.endswith(".sv") or tok.endswith(".v"):
@@ -82,7 +86,11 @@ def sources_of(path):
     for key, value in vars_.items():
         if key == "EXTRA_ARGS" and "+define+" in value:
             defines += [t for t in value.split() if t.startswith("+define+")]
-    return top, files, defines
+    generics = []
+    for tok in expand(vars_.get("COMPILE_ARGS", ""), vars_, here).split():
+        if GENERIC.match(tok):
+            generics.append(tok)
+    return top, files, defines, generics
 
 
 def main():
@@ -93,7 +101,7 @@ def main():
     for mk in sorted(root.glob("sim/**/Makefile*")):
         if "sim_build" in str(mk):
             continue
-        top, files, defines = sources_of(mk)
+        top, files, defines, generics = sources_of(mk)
         if not top or not files:
             continue
         seen += 1
@@ -106,15 +114,16 @@ def main():
         cmd = [verilator, "--lint-only", "-sv", "-Wno-TIMESCALEMOD", "-Wno-WIDTH",
                "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC", "-Wno-UNOPTFLAT",
                "-Wno-CASEINCOMPLETE", "-Wno-MULTIDRIVEN", "-Wno-SELRANGE",
-               "--top-module", top] + defines + files
+               "--top-module", top] + defines + generics + files
         res = subprocess.run(cmd, capture_output=True, text=True)
         errs = [l for l in res.stderr.splitlines() if l.startswith("%Error")]
         errs = [l for l in errs if "Exiting due to" not in l]
+        shown = (" " + " ".join(generics)) if generics else ""
         if errs:
-            print(f"FAIL {rel}: top {top}: {errs[0][:140]}")
+            print(f"FAIL {rel}: top {top}{shown}: {errs[0][:140]}")
             bad += 1
         else:
-            print(f"OK   {rel}: top {top}, {len(files)} source(s)")
+            print(f"OK   {rel}: top {top}, {len(files)} source(s){shown}")
     if seen == 0:
         print("FAIL gate resolved no simulation set")
         return 1

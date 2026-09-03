@@ -15,7 +15,9 @@
 module tu03_pktgen_board_top #(
 
   parameter integer HOST_ADDR_W   = 16,
-  parameter integer LOOPBACK_MODE = 0
+  parameter integer LOOPBACK_MODE = 0,
+  parameter integer LEN_MIN_HW    = 60,
+  parameter integer LEN_MAX_HW    = 9018
 )(
 
   input  wire        gt_ref_clk_p,
@@ -69,7 +71,9 @@ module tu03_pktgen_board_top #(
 
   fpga_pktgen_top #(
     .HOST_ADDR_W   (HOST_ADDR_W),
-    .LOOPBACK_MODE (LOOPBACK_MODE)
+    .LOOPBACK_MODE (LOOPBACK_MODE),
+    .LEN_MIN_HW    (LEN_MIN_HW),
+    .LEN_MAX_HW    (LEN_MAX_HW)
   ) u_pktgen (
     .sys_reset      (~pl_resetn),
 

@@ -27,7 +27,7 @@ module tb_dcmac_ip_variant;
   localparam int RX_HALF_OK = 2000;
   localparam int RX_HALF_SLOW = 20000;
 
-  localparam int MAXB = 2048;
+  localparam int MAXB = 9018;
   localparam int MAXF = 32;
 
   logic seg_clk = 0, tx_clk_i = 0, rx_clk_i = 0;
@@ -185,6 +185,7 @@ module tb_dcmac_ip_variant;
   bit           mon_enable = 0;
   int           w7_violations = 0;
   int           err_misplaced = 0;
+  int           capture_overflow = 0;
 
   bit  in_frame = 0;
   int  cur_len  = 0;
@@ -209,6 +210,8 @@ module tb_dcmac_ip_variant;
             for (i = 0; i < nbytes; i++) begin
               if (mon_frames < MAXF && (cur_len + i) < MAXB)
                 mon_d[mon_frames][cur_len + i] = tx_seg_dat[(s*SEG_B + i)*8 +: 8];
+              else if (mon_frames < MAXF)
+                capture_overflow = capture_overflow + 1;
             end
             cur_len = cur_len + nbytes;
             if (tx_seg_err[s] && !tx_seg_eop[s]) begin
@@ -348,6 +351,8 @@ module tb_dcmac_ip_variant;
       for (i = 0; i < nb; i++)
         if (rxm_frames < MAXF && (rxs_len + i) < MAXB)
           rxm_d[rxm_frames][rxs_len + i] = m_axis_rx_tdata[i*8 +: 8];
+        else if (rxm_frames < MAXF)
+          capture_overflow = capture_overflow + 1;
       if (!m_axis_rx_tlast && m_axis_rx_tuser[0]) begin
         rx_user_early = rx_user_early + 1;
   $display("  VIOLATION @%0t: rx tuser[0] set on a non-last beat", $time);
@@ -474,8 +479,11 @@ module tb_dcmac_ip_variant;
       rx_half = RX_HALF_OK;
     end
 
-    $display("TB_RESULT %s tests=%0d failures=%0d",
-             (failures == 0) ? "PASS" : "FAIL", tests, failures);
+    chk(capture_overflow == 0,
+        "a captured frame exceeded MAXB, so the comparison would have run against truncated data");
+
+    $display("TB_RESULT %s tests=%0d failures=%0d capture_overflow=%0d",
+             (failures == 0) ? "PASS" : "FAIL", tests, failures, capture_overflow);
     if (failures != 0) $fatal(1, "tb_dcmac_ip_variant: %0d check(s) failed", failures);
     $finish;
   end

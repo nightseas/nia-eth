@@ -17,7 +17,7 @@ module tb_dcmac_axis_pktgen_loop #(
   parameter integer DATA_W      = 512,
   parameter integer AXIL_ADDR_W = 12,
   parameter integer LEN_MIN_HW  = 64,
-  parameter integer LEN_MAX_HW  = 1518
+  parameter integer LEN_MAX_HW  = 9018
 )(
   input  wire                   net_clk,
   input  wire                   net_rstn,
