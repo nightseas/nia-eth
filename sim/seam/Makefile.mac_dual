@@ -31,12 +31,14 @@ VERILOG_SOURCES := \
   $(RTL_DIR)/ctl/dcmac_axil_exec.sv \
   $(RTL_DIR)/ctl/dcmac_axil_arb.sv \
   $(RTL_DIR)/ctl/dcmac_link_ctl.sv \
-  $(RTL_DIR)/dcmac_seg_axis_adapter.sv \
+  $(RTL_DIR)/dcmac_seg_axis_rx.sv \
+                   $(RTL_DIR)/dcmac_seg_axis_adapter.sv \
   $(RTL_DIR)/eth_axis_dwidth.sv \
   $(MODEL_DIR)/eth_axis_async_fifo.sv \
   $(RTL_DIR)/dcmac_axis_frame_fifo.sv \
   $(MODEL_DIR)/tx_frame_fifo.sv \
   $(RTL_DIR)/ctl/dcmac_mac_ctl_fsm.sv \
+  $(RTL_DIR)/dcmac_axis_rx_stream.sv \
   $(RTL_DIR)/dcmac_axis_adapter.sv \
   $(RTL_DIR)/dcmac_sync2.sv \
   $(RTL_DIR)/gt_rst_req_gate.sv \

@@ -35,7 +35,16 @@ module dcmac_phy #(
   parameter logic [7:0] POLARITY_TX_Q0         = dcmac_ctl_pkg::QSFP0_TXPOLARITY,
   parameter logic [7:0] POLARITY_RX_Q0         = dcmac_ctl_pkg::QSFP0_RXPOLARITY,
   parameter logic [7:0] POLARITY_TX_Q1         = dcmac_ctl_pkg::QSFP1_TXPOLARITY,
-  parameter logic [7:0] POLARITY_RX_Q1         = dcmac_ctl_pkg::QSFP1_RXPOLARITY
+  parameter logic [7:0] POLARITY_RX_Q1         = dcmac_ctl_pkg::QSFP1_RXPOLARITY,
+  parameter logic [7:0] POLARITY_TX_Q2         = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_RX_Q2         = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_TX_Q3         = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_RX_Q3         = 8'b0000_0000,
+
+  // The transceiver serial pin count of the whole image, four a quad. Every implementation
+  // of dcmac_phy declares it, because choosing between them is a file list swap and their
+  // port lists shall stay identical.
+  parameter int         GT_LANES         = 8
 )(
 
   input  wire                              sys_reset,
@@ -45,16 +54,17 @@ module dcmac_phy #(
   input  wire                              gt_ref_clk1_p,
   input  wire                              gt_ref_clk1_n,
 
-  input  wire [4*N_CLIENT-1:0]             gt_rxp_in,
-  input  wire [4*N_CLIENT-1:0]             gt_rxn_in,
-  output wire [4*N_CLIENT-1:0]             gt_txn_out,
-  output wire [4*N_CLIENT-1:0]             gt_txp_out,
+  input  wire [GT_LANES-1:0]             gt_rxp_in,
+  input  wire [GT_LANES-1:0]             gt_rxn_in,
+  output wire [GT_LANES-1:0]             gt_txn_out,
+  output wire [GT_LANES-1:0]             gt_txp_out,
 
   output wire                              seg_clk,
 
   output wire [N_CLIENT-1:0]                seg_rstn,
   output wire                               seg_rstn_ctl,
   output wire                              usr_clk,
+  output wire                              net_clk,
 
   output wire [N_CLIENT-1:0]               rx_seg_valid,
   output wire [N_CLIENT*N_SEG*SEG_W-1:0]   rx_seg_dat,
@@ -202,6 +212,7 @@ module dcmac_phy #(
   assign seg_clk = axis_clk;
 
   wire usr_clk_i;
+  wire net_clk_i;
   wire freerun_clk_i;
   wire usr_clk_locked;
   dcmac_usr_clk_wiz i_usr_clk_wiz (
@@ -209,9 +220,11 @@ module dcmac_phy #(
     .clk_in1  (clk_wiz_in),
     .locked   (usr_clk_locked),
     .clk_out1 (usr_clk_i),
-    .clk_out2 (freerun_clk_i)
+    .clk_out2 (freerun_clk_i),
+    .clk_out3 (net_clk_i)
   );
   assign usr_clk = usr_clk_i;
+  assign net_clk = net_clk_i;
 
   wire [5:0] rx_serdes_clk;
   wire [5:0] tx_serdes_clk;

@@ -25,18 +25,49 @@ if {$rate != 100} {
   set clients [expr {$rate == 400 ? 1 : 2}]
 }
 
-set pktgen [expr {[info exists env(NIA_PKTGEN)] ? $env(NIA_PKTGEN) : "seg"}]
+# The electrical lane count of one client. It follows the rate everywhere except at 200G,
+# where a port is either 200GAUI-2, two lanes of 106.25 Gb/s on one quad a cage, or
+# 200GAUI-4, four lanes of 53.125 Gb/s on the two quads of a cage. NIA_GAUI selects it and
+# each rate's default is the lane count it has always built with, so the existing images are
+# unchanged.
+set gaui_default [expr {$rate == 100 ? 1 : ($rate == 400 ? 4 : 2)}]
+set gaui [expr {[info exists env(NIA_GAUI)] ? $env(NIA_GAUI) : $gaui_default}]
+if {$gaui != $gaui_default && !($rate == 200 && $gaui == 4)} {
+  puts "IMAGE FAIL: NIA_RATE=$rate with NIA_GAUI=$gaui is not a configuration this repository\
+carries. The electrical lane count is fixed by the port pattern of the DCMAC and by the cage\
+wiring: 100 takes 1, 400 takes 4, and 200 takes 2 or 4."
+  exit 2
+}
+
+# CAUTION: 200GAUI-4 is out of scope for this release. This release covers 112G PAM4 a lane only,
+# which is 100GAUI-1, 200GAUI-2 and 400GAUI-4, all running 106.25 Gb/s a lane. A 200GAUI-4 cage
+# needs four lanes at 53.125 and the wizards carried here are preset at 106.25, so the link it
+# builds is misconfigured; plan Section 11.32.9 records this and marks axis200g4_391,
+# axis200g4v2_391 and amd200g4v2_391 as not for use. The source is kept so the work is not lost
+# and so the elaboration gates still cover it, and this refusal is what keeps it out of every
+# image. Lifting the refusal requires the wizard preset corrected and a fresh measurement.
+if {$rate == 200 && $gaui == 4} {
+  puts "IMAGE FAIL: NIA_RATE=200 with NIA_GAUI=4 selects 200GAUI-4, which is out of scope for this\
+release. This release covers 112G PAM4 a lane only. Build 200G as 200GAUI-2 by leaving NIA_GAUI\
+unset. See plan Section 11.32.9."
+  exit 2
+}
+set gaui4_200g [expr {$rate == 200 && $gaui == 4}]
+# A cage occupies the serial pins of every quad that serves it, four a quad. Every
+# configuration this image builds is one quad a cage, including 200GAUI-4, so the count is 8
+# across the two cages. GAUI selects the transceiver preset and not the pin count.
+set gt_lanes 8
+puts "IMAGE GAUI $gaui"
+puts "IMAGE GT_LANES $gt_lanes"
+
+set pktgen [expr {[info exists env(NIA_PKTGEN)] ? $env(NIA_PKTGEN) : "axis"}]
 if {[lsearch -exact {seg axis} $pktgen] < 0} {
   puts "IMAGE FAIL: NIA_PKTGEN=$pktgen is not one of seg, axis"
   exit 2
 }
-if {$pktgen eq "axis" && $rate != 100} {
-  puts "IMAGE FAIL: NIA_PKTGEN=axis is built at NIA_RATE=100 only. It was asked for at rate $rate,\
-and the AXI-Stream host width has to follow the client geometry, DATA_W = 2 x N_SEG x 128, which no\
-wider seam provides yet."
-  exit 2
-}
 puts "IMAGE PKTGEN $pktgen"
+
+set stream_w [expr {$rate == 100 ? 512 : 1024}]
 
 switch -- $rate {
   100 {
@@ -54,6 +85,10 @@ switch -- $rate {
     set rate_phy_section PHY_RATE200
     set rate_top      tu03_pktgen_dual200_top
     set rate_top_file tu03_pktgen_dual200_top.sv
+    if {$pktgen eq "axis"} {
+      set rate_top      tu03_axispg_dual_top
+      set rate_top_file tu03_axispg_dual_top.sv
+    }
     set xdc_name      tu03_pktgen_dual_timing.xdc
     set phys_name     tu03_pktgen_post_synth.tcl
   }
@@ -61,6 +96,10 @@ switch -- $rate {
     set rate_phy_section PHY_RATE400
     set rate_top      tu03_pktgen_400g_top
     set rate_top_file tu03_pktgen_400g_top.sv
+    if {$pktgen eq "axis"} {
+      set rate_top      tu03_axispg_dual_top
+      set rate_top_file tu03_axispg_dual_top.sv
+    }
     set xdc_name      tu03_pktgen_400g_timing.xdc
     set phys_name     tu03_pktgen_400g_post_synth.tcl
   }
@@ -128,7 +167,7 @@ if {![file exists $file_list]} {
 
 if {$pktgen eq "axis"} {
   set sections [list COMMON FIFO_IP PKTGEN_AXIS $rate_phy_section OPTIONAL]
-  lappend sections [expr {$clients > 1 ? "TOP_SEAM_DUAL" : "TOP_SEAM"}]
+  lappend sections [expr {$top eq "tu03_axispg_top" ? "TOP_SEAM" : "TOP_SEAM_DUAL"}]
 } else {
   set sections [list COMMON PKTGEN TOP_PKTGEN $rate_phy_section OPTIONAL]
   if {$clients > 1} { lappend sections TOP_PKTGEN_DUAL }
@@ -150,12 +189,10 @@ foreach src $sources {
     exit 2
   }
 }
-if {$rate == 100} {
-  if {$pktgen eq "axis"} {
-    lappend sources [file normalize [file join $nia_root example TU03 fpga rtl fpga_axispg_dual_top.sv]]
-  } else {
-    lappend sources [file normalize [file join $nia_root example TU03 fpga rtl fpga_pktgen_top.sv]]
-  }
+if {$pktgen eq "axis"} {
+  lappend sources [file normalize [file join $nia_root example TU03 fpga rtl fpga_axispg_dual_top.sv]]
+} elseif {$rate == 100} {
+  lappend sources [file normalize [file join $nia_root example TU03 fpga rtl fpga_pktgen_top.sv]]
 }
 if {!$ooc} {
   lappend sources [file normalize [file join $nia_root example TU03 fpga rtl $rate_top_file]]
@@ -245,17 +282,36 @@ puts "IMAGE TOP $top"
 puts "IMAGE CLIENTS $clients"
 puts "IMAGE LOOPBACK $loopback"
 puts "IMAGE FRAME_LENGTH LEN_MIN_HW=$len_min_hw LEN_MAX_HW=$len_max_hw, excluding the frame check sequence"
+set a_geom ""
+set a_defs ""
+if {$pktgen eq "axis"} {
+  set usr_mhz [expr {[info exists env(NIA_USR_MHZ)] ? $env(NIA_USR_MHZ) : 250}]
+  if {[lsearch -exact {250 391} $usr_mhz] < 0} {
+    puts "IMAGE FAIL: NIA_USR_MHZ=$usr_mhz is not one of 250, 391"
+    exit 2
+  }
+  set a_geom "-generic RATE=$rate -generic GAUI=$gaui -generic GT_LANES=$gt_lanes\
+              -generic DATA_W=$stream_w -generic USR_MHZ=$usr_mhz"
+  puts "IMAGE GEOMETRY RATE=$rate GAUI=$gaui GT_LANES=$gt_lanes DATA_W=$stream_w USR_MHZ=$usr_mhz"
+  # The receive frame FIFO is DATA_W+KEEP_W+2 bits wide and RX_FIFO_AW deep. Left in
+  # distributed RAM it costs 21200 CLB LUT at RATE 200 and it reads asynchronously, so its
+  # read pointer drives the next FIFO's memory inputs through no register: 1131 of the 4176
+  # failing endpoints of the 2026-09-05 200G image ended there. Block RAM removes both.
+  set ff_bram [expr {[info exists env(NIA_RX_FF_BRAM)] ? $env(NIA_RX_FF_BRAM) : 1}]
+  if {$ff_bram != 0} { set a_defs "-verilog_define DCMAC_FRAME_FIFO_BRAM" }
+  puts "IMAGE RX_FRAME_FIFO [expr {$ff_bram != 0 ? {block RAM} : {distributed RAM}}]"
+}
 puts "IMAGE STAGE synth"
 if {$ooc} {
-  synth_design -top $top -part $part -mode out_of_context \
+  eval synth_design -top $top -part $part -mode out_of_context \
     -generic LOOPBACK_MODE=$loopback \
-    -generic LEN_MIN_HW=$len_min_hw -generic LEN_MAX_HW=$len_max_hw
+    -generic LEN_MIN_HW=$len_min_hw -generic LEN_MAX_HW=$len_max_hw $a_geom $a_defs
 } else {
   set d_synth [nia_synth_dir_arg]
   set a_retime [expr {[info exists env(NIA_SYNTH_RETIMING)] && $env(NIA_SYNTH_RETIMING) != 0 ? "-retiming" : ""}]
   puts "IMAGE SYNTH EFFORT directive='$d_synth' retiming='$a_retime'"
   eval synth_design -top $top -part $part -generic LOOPBACK_MODE=$loopback \
-    -generic LEN_MIN_HW=$len_min_hw -generic LEN_MAX_HW=$len_max_hw $d_synth $a_retime
+    -generic LEN_MIN_HW=$len_min_hw -generic LEN_MAX_HW=$len_max_hw $a_geom $a_defs $d_synth $a_retime
 }
 write_checkpoint -force [file join $out_dir post_synth.dcp]
 report_utilization -file [file join $out_dir post_synth_utilization.rpt]
@@ -278,6 +334,19 @@ proc nia_dir_arg {name {fallback ""}} {
   if {$v eq ""} { return "" }
   return "-directive $v"
 }
+# The standard implementation recipe for the AXI-Stream flow, and the one every reported
+# result shall be produced with:
+#
+#   opt_design       default
+#   place_design     -directive ExtraTimingOpt
+#   phys_opt_design  -directive AggressiveExplore     before routing
+#   route_design     default
+#   phys_opt_design  -directive AggressiveExplore     after routing
+#
+# Each stage takes an override, and an override that is empty means no directive, which is
+# how the 400G images of 2026-09-06 came to run without the pre-route physical optimisation:
+# the dispatch passed NIA_PHYS_DIRECTIVE with an empty value. Those images closed anyway,
+# q400mech at 0.000 and q400rx at +0.002, so the recipe below is the untried margin on them.
 set axis_place_default [expr {$pktgen eq "axis" ? "ExtraTimingOpt" : ""}]
 set axis_phys_default  [expr {$pktgen eq "axis" ? "AggressiveExplore" : ""}]
 set axis_post_default  [expr {$pktgen eq "axis" ? 1 : 0}]
@@ -324,6 +393,51 @@ puts "IMAGE WHS $whs"
 set nfail [llength [get_timing_paths -delay_type max -max_paths 10000 -slack_lesser_than 0]]
 puts "IMAGE FAILING_PATHS $nfail"
 
+# Every clock domain crossing, classified by the tool rather than by review. The counts come
+# from the summary table of the report, because get_cdc_violations is absent from this release.
+set nia_cdc_rpt [file join $out_dir post_route_cdc.rpt]
+report_cdc -details -file $nia_cdc_rpt
+array set nia_cdc_count {Critical 0 Warning 0 Info 0}
+if {[file exists $nia_cdc_rpt]} {
+  set nia_fh [open $nia_cdc_rpt r]
+  foreach nia_line [split [read $nia_fh] "\n"] {
+    if {[regexp {^CDC-[0-9]+\s+(Critical|Warning|Info)\s+([0-9]+)\s} $nia_line -> \
+         nia_sev nia_cnt]} {
+      incr nia_cdc_count($nia_sev) $nia_cnt
+    }
+  }
+  close $nia_fh
+}
+foreach nia_sev {Critical Warning} {
+  puts "IMAGE CDC_$nia_sev $nia_cdc_count($nia_sev)"
+}
+
+# The pulse width and minimum period checks catch a hard block driven outside its
+# specification, which no setup path reports. The DCMAC's APB3_CLK requires 3.333 ns, so a
+# 390.625 MHz register clock fails here and nowhere else, and an image with a negative WPWS
+# does not meet its constraints whatever WNS says. The figures are read out of the design
+# summary row of the timing report, which is the only place that carries them.
+set wpws "unknown"
+set npw  "unknown"
+set nia_sum [file join $out_dir post_route_timing_summary.rpt]
+if {[file exists $nia_sum]} {
+  set fh [open $nia_sum r]
+  set nia_lines [split [read $fh] "\n"]
+  close $fh
+  set nia_seen 0
+  foreach nia_l $nia_lines {
+    if {[string match "*| Design Timing Summary*" $nia_l]} { set nia_seen 1 ; continue }
+    if {$nia_seen && [regexp {^\s*(-?[0-9]+\.[0-9]+)\s+(-?[0-9]+\.[0-9]+)\s+(\d+)\s+(\d+)\s+(-?[0-9]+\.[0-9]+)\s+(-?[0-9]+\.[0-9]+)\s+(\d+)\s+(\d+)\s+(-?[0-9]+\.[0-9]+)\s+(-?[0-9]+\.[0-9]+)\s+(\d+)\s+(\d+)} $nia_l -> \
+        a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12]} {
+      set wpws $a9
+      set npw  $a11
+      break
+    }
+  }
+}
+puts "IMAGE WPWS $wpws"
+puts "IMAGE FAILING_PULSE_WIDTH $npw"
+
 set check_timing_rpt [file join $out_dir post_route_check_timing.rpt]
 check_timing -file $check_timing_rpt
 set noclk "unknown"
@@ -335,6 +449,22 @@ if {[file exists $check_timing_rpt]} {
   close $fh
 }
 puts "IMAGE NOCLK $noclk"
+
+set nia_props [file join $out_dir ${top}.image_props.txt]
+set nia_fh [open $nia_props w]
+puts $nia_fh "NIA_PKTGEN=$pktgen"
+puts $nia_fh "NIA_RATE=$rate"
+puts $nia_fh "NIA_GAUI=$gaui"
+puts $nia_fh "NIA_GT_LANES=$gt_lanes"
+puts $nia_fh "NIA_CLIENTS=$clients"
+puts $nia_fh "NIA_USR_MHZ=[expr {[info exists usr_mhz] ? $usr_mhz : 250}]"
+puts $nia_fh "NIA_DATA_W=$stream_w"
+puts $nia_fh "NIA_LEN_MIN_HW=$len_min_hw"
+puts $nia_fh "NIA_LEN_MAX_HW=$len_max_hw"
+puts $nia_fh "NIA_TOP=$top"
+puts $nia_fh "NIA_PART=$part"
+close $nia_fh
+puts "IMAGE PROPS $nia_props"
 
 if {$write_pdi} {
   if {[catch {write_device_image -force [file join $out_dir ${top}.pdi]} err]} {

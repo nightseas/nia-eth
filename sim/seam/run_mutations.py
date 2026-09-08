@@ -29,14 +29,14 @@ BASE = {"SEED": "1", "TX_MHZ": "250", "RX_MHZ": "250"}
 PTP = dict(BASE, PTP_TS_EN="1", TX_TAG_W="16")
 
 MUTANTS = [
-    ("M1", "dcmac_seg_axis_adapter.sv",
-     "        if (rx_seg_ena[s]) begin\n",
-     "        if (rx_seg_ena[s] && s == 0) begin\n",
-     "RX drops every segment except segment 0 (a lost segment)",
+    ("M1", "dcmac_seg_axis_rx.sv",
+     "          slot_load_next[write_slot_next] = 1'b1;",
+     "          slot_load_next[write_slot_next] = (lane == 0);",
+     "RX stores every segment except lane 0 nowhere, so a segment is lost",
      ["test_rx_byte_exact"], BASE),
     ("M2", "dcmac_seg_axis_adapter.sv",
-     "      tx_seg_mty[s*4 +: 4] = eop_s ? (SEG_B[3:0] - $countones(keepseg)) : 4'd0;",
-     "      tx_seg_mty[s*4 +: 4] = eop_s ? (SEG_B[3:0] - $countones(keepseg) + 4'd1) : 4'd0;",
+     "      slot_mty_c[j]  = MTY_W'(SEG_B) - MTY_W'($countones(keep_slot));",
+     "      slot_mty_c[j]  = MTY_W'(SEG_B) - MTY_W'($countones(keep_slot)) + MTY_W'(1);",
      "TX last-beat byte count off by one (corrupt tkeep/mty on EOP)",
      ["test_tx_byte_exact"], BASE),
     ("M3", "ctl/dcmac_mac_ctl_fsm.sv",
@@ -55,7 +55,7 @@ MUTANTS = [
      "store-and-forward defeated (a plain FIFO):  gaplessness lost",
      ["test_tx_gapless"], BASE),
 
-    ("M7", "dcmac_axis_adapter.sv",
+    ("M7", "dcmac_axis_rx_stream.sv",
      "    .DROP_BAD_FRAME(1'b0), .FLAG_BAD_FRAME(1'b1), .DROP_WHEN_FULL(1'b1),",
      "    .DROP_BAD_FRAME(1'b0), .FLAG_BAD_FRAME(1'b0), .DROP_WHEN_FULL(1'b1),",
   ": the RX frame FIFO stops re-pointing the frame-scoped error onto the "
@@ -73,7 +73,7 @@ MUTANTS = [
      "mid-frame test - error-at-EOP still works and the core's counter is separate",
      ["test_rx_err_midframe_flagged_on_tlast"], BASE),
 
-    ("M9", "dcmac_axis_adapter.sv",
+    ("M9", "dcmac_axis_rx_stream.sv",
      "    else if (rxa_tvalid && rxa_tlast && (rxa_tuser | rxa_err_seen) &&",
      "    else if (rxa_tvalid && rxa_tlast && rxa_tuser &&",
   " restored in the counter: a mid-frame RX error is not counted (X6)",
@@ -92,7 +92,7 @@ MUTANTS = [
      "user field is tied to zero, so a frame abort can never reach the MAC. This is the "
      "defect the native seam exists to fix, and it is one character deep",
      ["test_tx_abort_maps_to_seg_err"], BASE),
-    ("M12", "dcmac_axis_adapter.sv",
+    ("M12", "dcmac_axis_rx_stream.sv",
      "    else if (rx_sop) rx_ts_hold <= seg_ptp_time;",
      "    else if (rxa_tvalid && rxa_tlast) rx_ts_hold <= seg_ptp_time;",
   ": the RX PTP timestamp is captured at EOP instead of at SOP, so it describes "
@@ -116,35 +116,35 @@ MUTANTS = [
   ": no TX completion is ever generated, so a PTP tag never returns to the core. "
      "Only visible in the PTP/tag variant",
      ["test_tx_cpl_tag_roundtrip"], PTP),
-    ("M16", "dcmac_axis_adapter.sv",
+    ("M16", "dcmac_axis_rx_stream.sv",
   "    .m_axis_tready (1'b1),",
   "    .m_axis_tready (1'b0),",
   ": the push-only RX drain is stopped, so nothing is ever delivered. This proves "
      "the tie-off is load-bearing and not decoration",
      ["test_rx_byte_exact"], BASE),
-    ("M17", "dcmac_seg_axis_adapter.sv",
-     "            if (nxt_cnt != '0) sop_abort = 1'b1;",
-     "            if (1'b0) sop_abort = 1'b1;",
-     "a start of frame arriving with a partial assembly, which PG369 p127 does not permit, is "
-     "absorbed silently instead of being reported in rx_overflow",
+    ("M17", "dcmac_seg_axis_rx.sv",
+     "                      || sop_with_frame_open;",
+     "                      || 1'b0;",
+     "a segment arriving with every beat group already full is absorbed silently instead of "
+     "being reported in rx_align_drop",
      ["test_rx_sop_with_partial_assembly_is_reported"], BASE),
-    ("M20", "dcmac_seg_axis_adapter.sv",
-     "                if (int'(fill) > (t + 1))",
-     "                if (int'(fill) >= (t + 1))",
-     "the assembled beat keeps every byte of the segment that carries eop, so mty is ignored and "
-     "a frame is delivered up to 15 bytes too long",
+    ("M20", "dcmac_seg_axis_rx.sv",
+     "    valid_bytes = SEG_KEEP_W - int'(empty_bytes);",
+     "    valid_bytes = SEG_KEEP_W - int'(empty_bytes) + 1;",
+     "the final segment keeps one byte more than it carries, so a frame is delivered a byte "
+     "too long",
      ["test_rx_byte_exact"], BASE),
-    ("M18", "dcmac_seg_axis_adapter.sv",
-     "          if (rx_seg_eop[s] || (int'(fill) == N_SEG)) begin",
-     "          if (rx_seg_eop[s]) begin",
-     "the realigner presents a beat only at an end of frame, so a frame longer than one beat "
-     "overwrites its own assembly slots",
+    ("M18", "dcmac_seg_axis_rx.sv",
+     "        slot_data[slot] <= segment_data_d2[slot_lane_d1[slot]];",
+     "        slot_data[slot] <= segment_data_d1[slot_lane_d1[slot]];",
+     "the slot takes its lane select one pipeline stage early, so the slot holds the segment "
+     "of a neighbouring lane",
      ["test_rx_byte_exact"], BASE),
-    ("M19", "dcmac_seg_axis_adapter.sv",
-     "  localparam int MAX_EMIT = 2;",
-     "  localparam int MAX_EMIT = 1;",
-     "only one of the two beats a segmented cycle can complete is assembled, which is the defect "
-     "the first form of the realigner had",
+    ("M19", "dcmac_seg_axis_rx.sv",
+     "        if (group_filled_d1[group])      group_ready[group] <= 1'b1;",
+     "        if (group_filled_next[group])    group_ready[group] <= 1'b1;",
+     "a beat group is offered one cycle before its slots are written, which is the hazard the "
+     "second registration exists to remove",
      ["test_rx_packed_byte_exact"], BASE),
 ]
 

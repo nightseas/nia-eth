@@ -1,0 +1,19 @@
+# Instantiations that omit a parameter which sets a port width, and were present when
+# sim/gate/gate_port_width_params.py was written. Each takes a default that matches its
+# context. A new omission is a fault and shall be repaired rather than added here.
+example/TU03/fpga/rtl/fpga_axispg_dual_top.sv dcmac_axis_dual_top PTP_TS_W,RX_USER_W,TX_TAG_WP,TX_USER_W
+example/TU03/fpga/rtl/fpga_axispg_dual_top.sv dcmac_axis_pktgen RX_USER_W,TX_USER_W
+example/TU03/fpga/rtl/fpga_pktgen_top.sv dcmac_pktgen_top N_LANE
+example/TU03/fpga/rtl/tu03_axispg_top.sv dcmac_axis_pktgen RX_USER_W,TX_USER_W
+example/TU03/fpga/rtl/tu03_axispg_top.sv dcmac_axis_top PTP_TS_W,RX_USER_W,TX_TAG_WP,TX_USER_W
+rtl/dcmac_axis_dual_top.sv dcmac_port RX_USER_W,TX_TAG_WP,TX_USER_W
+rtl/dcmac_axis_top.sv dcmac_port N_STREAM,RX_USER_W,TX_TAG_WP,TX_USER_W
+rtl/dcmac_mac_group.sv dcmac_port N_STREAM,RX_USER_W,TX_TAG_WP,TX_USER_W
+rtl/dcmac_port.sv dcmac_axis_adapter RX_USER_W,TX_TAG_WP,TX_USER_W
+rtl/dcmac_seg_pktgen.sv dcmac_seg_pktgen_tx HDR_B
+sim/tb/tb_dcmac_adapter_link.sv dcmac_axis_adapter N_STREAM,RX_USER_W,TX_TAG_WP,TX_USER_W
+sim/tb/tb_dcmac_axis_pktgen_adapter.sv dcmac_axis_adapter N_STREAM,PTP_TS_W,RX_USER_W,TX_TAG_WP,TX_USER_W
+sim/tb/tb_dcmac_axis_pktgen_loop.sv dcmac_axis_pktgen RX_USER_W,TX_USER_W
+sim/tb/tb_dcmac_drp_bridge.sv dcmac_link_csr N_GROUP
+sim/tb/tb_dcmac_ip_variant.sv tb_dcmac_adapter_link RX_USER_W,TX_TAG_WP,TX_USER_W
+sim/tb/tb_dcmac_link_csr.sv dcmac_link_csr N_GROUP

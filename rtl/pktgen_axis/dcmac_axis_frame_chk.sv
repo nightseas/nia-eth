@@ -46,6 +46,12 @@ module dcmac_axis_frame_chk #(
   logic [31:0]       bytes_r;
   logic [31:0]       err_r;
   logic [31:0]       mis_r;
+  // The mismatch signal is a reduction over KEEP_W lane comparators, which is 128 lanes at
+  // 1024 bits, and the saturation test is a 32 bit compare. Both landed on the clock enable of
+  // mis_r, which measured +0.047 out of context at 1024 bits and -1.122 in the 391 MHz image
+  // m400u391. They are registered instead, so the enable of mis_r is two levels.
+  logic              mis_beat_r;
+  logic              mis_sat_r;
   logic              in_frame_r;
   logic              err_seen_r;
   logic              locked_r;
@@ -82,6 +88,8 @@ module dcmac_axis_frame_chk #(
       bytes_r    <= '0;
       err_r      <= '0;
       mis_r      <= '0;
+      mis_beat_r <= 1'b0;
+      mis_sat_r  <= 1'b0;
       in_frame_r <= 1'b0;
       err_seen_r <= 1'b0;
       locked_r   <= 1'b0;
@@ -93,14 +101,21 @@ module dcmac_axis_frame_chk #(
         bytes_r    <= '0;
         err_r      <= '0;
         mis_r      <= '0;
+        mis_beat_r <= 1'b0;
+        mis_sat_r  <= 1'b0;
         locked_r   <= 1'b0;
         cnt_v_r    <= 1'b0;
       end
 
       cnt_v_r <= 1'b0;
 
+      mis_beat_r <= beat && mismatch;
+      if (mis_beat_r && !mis_sat_r) begin
+        mis_r <= mis_r + 32'd1;
+        if (mis_r == 32'hFFFF_FFFE) mis_sat_r <= 1'b1;
+      end
+
       if (beat) begin
-        if (mismatch && (mis_r != 32'hFFFF_FFFF)) mis_r <= mis_r + 32'd1;
 
         cnt_r   <= s_axis_tlast ? keep_cnt : 8'(KEEP_W);
         cnt_v_r <= 1'b1;

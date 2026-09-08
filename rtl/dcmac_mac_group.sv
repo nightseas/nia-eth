@@ -152,6 +152,8 @@ module dcmac_mac_group #(
   endfunction
 
   wire seg_clk_i, usr_clk_i;
+
+  wire                     net_clk_i;
   wire [N_CLIENT-1:0] seg_rstn_i;
   assign seg_clk = seg_clk_i;
 
@@ -468,6 +470,7 @@ module dcmac_mac_group #(
       .seg_clk                 (seg_clk_i),
       .seg_rstn                (seg_rstn_i[c]),
       .usr_clk                 (usr_clk_i),
+      .net_clk                 (net_clk_i),
 
       .tx_clk                  (tx_clk[c]),
       .tx_rst                  (tx_rst[c]),
@@ -542,7 +545,8 @@ module dcmac_mac_group #(
   wire [N_CLIENT-1:0]          phy_tx_dp_reset = p_tx_dp_reset;
 
   dcmac_phy #(
-    .N_CLIENT(N_CLIENT), .N_SEG(N_SEG), .SEG_W(SEG_W), .PORT_MAX(PORT_MAX),
+    .N_CLIENT(N_CLIENT), .GT_LANES(4*N_CLIENT),
+    .N_SEG(N_SEG), .SEG_W(SEG_W), .PORT_MAX(PORT_MAX),
     .LOOPBACK_MODE(LOOPBACK_MODE),
     .ANCHOR_0(ANCHOR_0), .ANCHOR_1(ANCHOR_1),
     .EN_DPRST_SYNC(EN_DPRST_SYNC)
@@ -561,6 +565,7 @@ module dcmac_mac_group #(
     .seg_rstn                (seg_rstn_i),
     .seg_rstn_ctl            (seg_rstn_ctl_i),
     .usr_clk                 (usr_clk_i),
+    .net_clk                 (net_clk_i),
 
     .rx_seg_valid            (rx_seg_valid),
     .rx_seg_dat              (rx_seg_dat),

@@ -142,19 +142,32 @@ module dcmac_axis_pktgen #(
   logic [15:0] net_len_min_r, net_len_max_r;
   logic [1:0]  net_len_mode_r;
   logic [31:0] net_frame_limit_r;
+  // net_hdr_enable_r and net_hdr_flat_r join the set for the same reason the others are here:
+  // the configuration registers are written on axil_aclk and read by the source and the
+  // checker on net_clk. cfg_hdr_enable_r reached both of them unregistered, and it is the
+  // skip term inside the checker's KEEP_W lane comparison, so at 390.625 MHz it presented as
+  // 853 endpoints crossing from the register plane into the datapath at -2.344 ns in
+  // m400u391, with the bit replicated nine times by the implementation trying to reach them.
+  logic        net_hdr_enable_r;
+  logic [HDR_B*8-1:0] net_hdr_flat_r;
   always_ff @(posedge net_clk) begin
     if (!net_rstn) begin
       net_len_min_r     <= 16'(LEN_MIN_HW);
       net_len_max_r     <= 16'(LEN_MAX_HW);
       net_len_mode_r    <= '0;
       net_frame_limit_r <= '0;
+      net_hdr_enable_r  <= 1'b0;
     end else begin
       net_len_min_r     <= cfg_len_min_r;
       net_len_max_r     <= cfg_len_max_r;
       net_len_mode_r    <= cfg_len_mode_r;
       net_frame_limit_r <= cfg_frame_limit_r;
+      net_hdr_enable_r  <= cfg_hdr_enable_r;
     end
   end
+  // the header bytes carry no reset, because they are qualified by net_hdr_enable_r wherever
+  // they are read
+  always_ff @(posedge net_clk) net_hdr_flat_r <= hdr_flat;
 
   wire link_up_net;
   dcmac_sync2 #(.WIDTH(1)) u_link_sync (
@@ -236,8 +249,8 @@ module dcmac_axis_pktgen #(
     .cfg_len_max      (net_len_max_r),
     .cfg_len_mode     (net_len_mode_r),
     .cfg_frame_limit  (net_frame_limit_r),
-    .cfg_hdr_enable   (cfg_hdr_enable_r),
-    .cfg_hdr_bytes    (hdr_flat),
+    .cfg_hdr_enable   (net_hdr_enable_r),
+    .cfg_hdr_bytes    (net_hdr_flat_r),
     .m_axis_tdata     (m_axis_tx_tdata),
     .m_axis_tkeep     (m_axis_tx_tkeep),
     .m_axis_tvalid    (m_axis_tx_tvalid),
@@ -265,7 +278,7 @@ module dcmac_axis_pktgen #(
     .clk               (net_clk),
     .rstn              (net_rstn),
     .ctl_clear         (net_clear),
-    .cfg_hdr_enable    (cfg_hdr_enable_r),
+    .cfg_hdr_enable    (net_hdr_enable_r),
     .s_axis_tdata      (s_axis_rx_tdata),
     .s_axis_tkeep      (s_axis_rx_tkeep),
     .s_axis_tvalid     (s_axis_rx_tvalid),

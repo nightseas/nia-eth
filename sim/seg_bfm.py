@@ -165,7 +165,10 @@ class SegmentedSink:
             eop = int(self.dut.tx_seg_eop.value)
             err = int(self.dut.tx_seg_err.value)
             mty = int(self.dut.tx_seg_mty.value)
-            done = False
+            # A beat may carry the end of one frame and the start of the next, because the
+            # transmit packer places a start of packet on any segment that immediately
+            # follows an end of packet. The frame is therefore completed at each end of
+            # packet within the beat rather than once per beat.
             for s in range(n_seg):
                 if not ((ena >> s) & 1):
                     continue
@@ -177,11 +180,9 @@ class SegmentedSink:
                     self._cur.append((dat >> (base + j * 8)) & 0xFF)
                 if is_eop:
                     self._err |= (err >> s) & 1
-                    done = True
-            if done:
-                await self.queue.put((bytes(self._cur), self._err))
-                self._cur = bytearray()
-                self._err = 0
+                    await self.queue.put((bytes(self._cur), self._err))
+                    self._cur = bytearray()
+                    self._err = 0
 
     async def recv(self):
         return await self.queue.get()

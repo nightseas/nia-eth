@@ -127,6 +127,7 @@ module dcmac_axis_top #(
 );
 
   wire seg_clk_i, usr_clk_i, usr_rstn_i;
+  wire net_clk_i;
   wire [0:0] seg_rstn_i;
   assign seg_clk = seg_clk_i;
 
@@ -221,6 +222,7 @@ module dcmac_axis_top #(
     .seg_clk                 (seg_clk_i),
     .seg_rstn                (seg_rstn_ctl_i),
     .usr_clk                 (usr_clk_i),
+    .net_clk                 (net_clk_i),
 
     .tx_clk                  (tx_clk),
     .tx_rst                  (tx_rst),
@@ -398,7 +400,7 @@ module dcmac_axis_top #(
   wire [PORT_MAX-1:0] phy_rx_dp_ports = port_rx_dp_reset_ports | seq_rx_hit;
 
   dcmac_phy #(
-    .N_CLIENT(1),
+    .N_CLIENT(1), .GT_LANES(4),
     .N_SEG(N_SEG), .SEG_W(SEG_W), .PORT_MAX(PORT_MAX),
     .LOOPBACK_MODE(LOOPBACK_MODE),
     .ANCHOR_0(ANCHOR), .ANCHOR_1(ANCHOR + NPORTS)
@@ -417,6 +419,7 @@ module dcmac_axis_top #(
     .seg_rstn                (seg_rstn_i),
     .seg_rstn_ctl            (seg_rstn_ctl_i),
     .usr_clk                 (usr_clk_i),
+    .net_clk                 (net_clk_i),
 
     .rx_seg_valid            (rx_seg_valid),
     .rx_seg_dat              (rx_seg_dat),

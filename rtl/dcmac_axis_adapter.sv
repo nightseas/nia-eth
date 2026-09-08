@@ -13,10 +13,12 @@
 
 `timescale 1ns/1ps
 
-`ifdef DCMAC_FRAME_FIFO_BRAM
-  `define NIA_RX_FF_MEM_STYLE "block"
-`else
-  `define NIA_RX_FF_MEM_STYLE "distributed"
+`ifndef NIA_RX_FF_MEM_STYLE
+  `ifdef DCMAC_FRAME_FIFO_BRAM
+    `define NIA_RX_FF_MEM_STYLE "block"
+  `else
+    `define NIA_RX_FF_MEM_STYLE "distributed"
+  `endif
 `endif
 
 module dcmac_axis_adapter #(
@@ -25,9 +27,21 @@ module dcmac_axis_adapter #(
   parameter integer SEG_W      = 128,
   parameter integer DATA_W     = 512,
 
+  // The stream ports this client presents. One at 100G and 200G. Two at 400G, where
+  // successive frames alternate between the ports: a single 1024 bit port would need
+  // 654 MHz to carry the 400G frame rate, which is the reason AMD's converter also
+  // splits at that rate, axis_seg_to_unseg_converter.v:71.
+  parameter integer N_STREAM   = 1,
+
   parameter integer PTP_TS_EN  = 0,
   parameter integer PTP_TS_W   = 80,
   parameter integer TX_TAG_W   = 0,
+
+  // The receive ring holds RX_RING_DEPTH rows of N_SEG segments. Four rows is the minimum
+  // the read plan allows and it is what the wide geometries use: the row select is then a
+  // four way multiplexer per lane rather than a sixteen way one, and the ring costs a
+  // quarter of the flops.
+  parameter integer RX_RING_DEPTH = 4,
 
   parameter integer RX_FIFO_AW = 9,
   parameter integer RX_CDC_AW  = 9,
@@ -63,11 +77,11 @@ module dcmac_axis_adapter #(
   output wire [PTP_TS_W-1:0]          m_axis_tx_cpl_ts,
   output wire [TX_TAG_WP-1:0]         m_axis_tx_cpl_tag,
 
-  output wire [DATA_W-1:0]            m_axis_rx_tdata,
-  output wire [DATA_W/8-1:0]          m_axis_rx_tkeep,
-  output wire                         m_axis_rx_tvalid,
-  output wire                         m_axis_rx_tlast,
-  output wire [RX_USER_W-1:0]         m_axis_rx_tuser,
+  output wire [N_STREAM*DATA_W-1:0]   m_axis_rx_tdata,
+  output wire [N_STREAM*DATA_W/8-1:0] m_axis_rx_tkeep,
+  output wire [N_STREAM-1:0]          m_axis_rx_tvalid,
+  output wire [N_STREAM-1:0]          m_axis_rx_tlast,
+  output wire [N_STREAM*RX_USER_W-1:0] m_axis_rx_tuser,
 
   input  wire [PTP_TS_W-1:0]          seg_ptp_time,
 
@@ -125,11 +139,21 @@ module dcmac_axis_adapter #(
   end
 
   (* ASYNC_REG = "TRUE" *) logic tx_rst_s0 = 1'b1, tx_rst_s1 = 1'b1;
+  // report_cdc gives CDC-10, combinational logic detected before a synchroniser, for both
+  // status crossings below: link_up_i & ctl_tx_enable was an AND presented to the first
+  // asynchronous flop, so the flop can capture the gate settling rather than a stable value.
+  // The term is formed in the source domain first and the synchroniser takes a register.
+  logic tx_sts_src = 1'b0;
+  always_ff @(posedge seg_clk) begin
+    if (!seg_rstn) tx_sts_src <= 1'b0;
+    else           tx_sts_src <= link_up_i & ctl_tx_enable;
+  end
+
   (* ASYNC_REG = "TRUE" *) logic tx_sts_s0 = 1'b0, tx_sts_s1 = 1'b0;
   always_ff @(posedge tx_clk) begin
     tx_rst_s0 <= tx_rst_seg;
     tx_rst_s1 <= tx_rst_s0;
-    tx_sts_s0 <= link_up_i & ctl_tx_enable;
+    tx_sts_s0 <= tx_sts_src;
     tx_sts_s1 <= tx_sts_s0;
   end
   assign tx_rst    = tx_rst_s1;
@@ -148,173 +172,107 @@ module dcmac_axis_adapter #(
 
   wire rx_gated_valid = rx_seg_valid & link_up_i;
 
-  logic [SEG_BITS-1:0] rxa_tdata;
-  logic [SEG_KEEP-1:0] rxa_tkeep;
-  logic                rxa_tvalid, rxa_tready, rxa_tlast, rxa_tuser;
-  logic                rx_align_drop;
+  // The frame parity steer. A frame's segments all carry the same parity, so each receive
+  // stream sees whole frames and needs to know nothing about the other. The parity toggles
+  // at every start of packet, so frame 0 goes to stream 0. At N_STREAM 1 the steer is a
+  // constant and synthesis removes it.
+  logic [N_SEG-1:0] str_par;
+  logic             frame_par_q;
+  logic             frame_par_d;
 
-  dcmac_seg_axis_rx #(.N_SEG(N_SEG), .SEG_W(SEG_W)) u_seg_rx (
-    .clk           (seg_clk),
-    .rstn          (seg_rstn),
-    .rx_seg_valid  (rx_gated_valid),
-    .rx_seg_dat    (rx_seg_dat),
-    .rx_seg_ena    (rx_seg_ena),
-    .rx_seg_sop    (rx_seg_sop),
-    .rx_seg_eop    (rx_seg_eop),
-    .rx_seg_err    (rx_seg_err),
-    .rx_seg_mty    (rx_seg_mty),
-    .m_axis_tdata  (rxa_tdata),
-    .m_axis_tkeep  (rxa_tkeep),
-    .m_axis_tvalid (rxa_tvalid),
-    .m_axis_tready (rxa_tready),
-    .m_axis_tlast  (rxa_tlast),
-    .m_axis_tuser  (rxa_tuser),
-    .rx_align_drop (rx_align_drop),
-    .rx_align_stat (rx_align_stat)
-  );
-
-  logic rx_in_frame;
-  always_ff @(posedge seg_clk) begin
-    if (!seg_rstn)         rx_in_frame <= 1'b0;
-    else if (rxa_tvalid)   rx_in_frame <= ~rxa_tlast;
-  end
-
-  logic        rxa_err_seen;
-  always_ff @(posedge seg_clk) begin
-    if (!seg_rstn)                    rxa_err_seen <= 1'b0;
-    else if (rxa_tvalid && rxa_tlast) rxa_err_seen <= 1'b0;
-    else if (rxa_tvalid)              rxa_err_seen <= rxa_err_seen | rxa_tuser;
-  end
-
-  logic [31:0] rx_err_cnt;
-  always_ff @(posedge seg_clk) begin
-    if (!seg_rstn)                                  rx_err_cnt <= '0;
-    else if (rxa_tvalid && rxa_tlast && (rxa_tuser | rxa_err_seen) &&
-             rx_err_cnt != 32'hFFFF_FFFF)           rx_err_cnt <= rx_err_cnt + 1'b1;
-  end
-  assign rx_err_frames = rx_err_cnt;
-
-  wire rx_sop = rxa_tvalid & ~rx_in_frame;
-  logic [PTP_TS_W-1:0] rx_ts_hold;
-  always_ff @(posedge seg_clk) begin
-    if (!seg_rstn)   rx_ts_hold <= '0;
-    else if (rx_sop) rx_ts_hold <= seg_ptp_time;
-  end
-  wire [PTP_TS_W-1:0] rx_ts_cur = rx_sop ? seg_ptp_time : rx_ts_hold;
-
-  logic        link_up_1d;
-  logic        rx_abort;
-  logic [2:0]  rx_flush_cnt;
-  logic        rx_trunc_r;
-  always_ff @(posedge seg_clk) begin
-    if (!seg_rstn) begin
-      link_up_1d   <= 1'b0;
-      rx_flush_cnt <= '0;
-      rx_trunc_r   <= 1'b0;
-    end else begin
-      link_up_1d <= link_up_i;
-      if (rx_abort) begin
-        rx_flush_cnt <= 3'd4;
-        rx_trunc_r   <= 1'b1;
-      end else if (rx_flush_cnt != '0) begin
-        rx_flush_cnt <= rx_flush_cnt - 1'b1;
-      end
+  always_comb begin
+    logic p;
+    p = frame_par_q;
+    for (int s = 0; s < N_SEG; s++) begin
+      if (rx_gated_valid && rx_seg_ena[s] && rx_seg_sop[s]) p = ~p;
+      str_par[s] = p;
     end
+    frame_par_d = p;
   end
-  assign rx_abort = link_up_1d & ~link_up_i & rx_in_frame;
-  assign rx_trunc = rx_trunc_r;
 
-  wire rx_up_rstn = seg_rstn & ~(rx_abort | (rx_flush_cnt != 3'd0));
+  always_ff @(posedge seg_clk) begin
+    if (!seg_rstn) frame_par_q <= 1'b1;
+    else           frame_par_q <= frame_par_d;
+  end
 
-  logic [DATA_W-1:0]    rxu_tdata;
-  logic [NET_KEEP-1:0]  rxu_tkeep;
-  logic                 rxu_tvalid, rxu_tready, rxu_tlast;
-  logic [RX_USER_W-1:0] rxu_tuser;
+  wire [N_STREAM-1:0] str_overflow;
+  wire [N_STREAM-1:0] str_trunc;
+  wire [32*N_STREAM-1:0] str_err_frames;
+  wire [32*N_STREAM-1:0] str_drop_frames;
+  wire [32*N_STREAM-1:0] str_align_stat;
 
-  wire [RX_USER_W-1:0] rxa_user_vec;
+  genvar g;
   generate
-  if (RX_USER_W > 1) begin : g_rx_user_wide
-    assign rxa_user_vec = {rx_ts_cur, rxa_tuser};
-  end else begin : g_rx_user_narrow
-    assign rxa_user_vec = rxa_tuser;
+  for (g = 0; g < N_STREAM; g++) begin : g_rx_stream
+    wire [N_SEG-1:0] ena_g;
+    if (N_STREAM > 1) begin : g_steer
+      assign ena_g = rx_seg_ena & (g[0] ? str_par : ~str_par);
+    end else begin : g_no_steer
+      assign ena_g = rx_seg_ena;
+    end
+
+    dcmac_axis_rx_stream #(
+      .N_SEG(N_SEG), .SEG_W(SEG_W), .DATA_W(DATA_W),
+      .PTP_TS_W(PTP_TS_W), .RX_USER_W(RX_USER_W),
+      .RX_RING_DEPTH(RX_RING_DEPTH), .RX_FIFO_AW(RX_FIFO_AW), .RX_CDC_AW(RX_CDC_AW)
+    ) u_rx_stream (
+      .seg_clk          (seg_clk),
+      .seg_rstn         (seg_rstn),
+      .rx_clk           (rx_clk),
+      .rx_rstn          (rx_rstn),
+      .link_up          (link_up_i),
+      .rx_seg_valid     (rx_gated_valid),
+      .rx_seg_dat       (rx_seg_dat),
+      .rx_seg_ena       (ena_g),
+      .rx_seg_sop       (rx_seg_sop),
+      .rx_seg_eop       (rx_seg_eop),
+      .rx_seg_err       (rx_seg_err),
+      .rx_seg_mty       (rx_seg_mty),
+      .seg_ptp_time     (seg_ptp_time),
+      .m_axis_rx_tdata  (m_axis_rx_tdata[g*DATA_W +: DATA_W]),
+      .m_axis_rx_tkeep  (m_axis_rx_tkeep[g*(DATA_W/8) +: DATA_W/8]),
+      .m_axis_rx_tvalid (m_axis_rx_tvalid[g]),
+      .m_axis_rx_tlast  (m_axis_rx_tlast[g]),
+      .m_axis_rx_tuser  (m_axis_rx_tuser[g*RX_USER_W +: RX_USER_W]),
+      .rx_overflow      (str_overflow[g]),
+      .rx_trunc         (str_trunc[g]),
+      .rx_err_frames    (str_err_frames[g*32 +: 32]),
+      .rx_drop_frames   (str_drop_frames[g*32 +: 32]),
+      .rx_align_stat    (str_align_stat[g*32 +: 32])
+    );
   end
   endgenerate
 
-  eth_axis_dwidth_up #(.IN_W(SEG_BITS), .OUT_W(DATA_W), .USER_W(RX_USER_W)) u_rx_up (
-    .clk           (seg_clk),
-    .rstn          (rx_up_rstn),
-    .s_axis_tdata  (rxa_tdata),
-    .s_axis_tkeep  (rxa_tkeep),
-    .s_axis_tvalid (rxa_tvalid),
-    .s_axis_tready (rxa_tready),
-    .s_axis_tlast  (rxa_tlast),
-    .s_axis_tuser  (rxa_user_vec),
-    .m_axis_tdata  (rxu_tdata),
-    .m_axis_tkeep  (rxu_tkeep),
-    .m_axis_tvalid (rxu_tvalid),
-    .m_axis_tready (rxu_tready),
-    .m_axis_tlast  (rxu_tlast),
-    .m_axis_tuser  (rxu_tuser)
-  );
-
-  logic rx_fifo_overflow;
-  logic rx_cdc_overflow;
-
-  logic [DATA_W-1:0]    rxq_tdata;
-  logic [NET_KEEP-1:0]  rxq_tkeep;
-  logic                 rxq_tvalid, rxq_tready, rxq_tlast;
-  logic [RX_USER_W-1:0] rxq_tuser;
-  logic [31:0]          rx_drop_cnt;
-
-  dcmac_axis_frame_fifo #(
-    .DATA_W(DATA_W), .KEEP_W(NET_KEEP), .USER_W(RX_USER_W), .ADDR_W(RX_FIFO_AW),
-    .DROP_BAD_FRAME(1'b0), .FLAG_BAD_FRAME(1'b1), .DROP_WHEN_FULL(1'b1),
-    .MEM_STYLE(`NIA_RX_FF_MEM_STYLE)
-  ) u_rx_frame_fifo (
-    .clk           (seg_clk),
-    .rstn          (seg_rstn),
-    .abort         (rx_abort),
-    .s_axis_tdata  (rxu_tdata),
-    .s_axis_tkeep  (rxu_tkeep),
-    .s_axis_tvalid (rxu_tvalid),
-    .s_axis_tready (rxu_tready),
-    .s_axis_tlast  (rxu_tlast),
-    .s_axis_tuser  (rxu_tuser),
-    .m_axis_tdata  (rxq_tdata),
-    .m_axis_tkeep  (rxq_tkeep),
-    .m_axis_tvalid (rxq_tvalid),
-    .m_axis_tready (rxq_tready),
-    .m_axis_tlast  (rxq_tlast),
-    .m_axis_tuser  (rxq_tuser),
-    .drop_frames   (rx_drop_cnt),
-    .overflow      (rx_fifo_overflow)
-  );
-  assign rx_drop_frames = rx_drop_cnt;
-
-  eth_axis_async_fifo #(
-    .DATA_W(DATA_W), .KEEP_W(NET_KEEP), .USER_W(RX_USER_W), .ADDR_W(RX_CDC_AW),
-    .DROP_ON_FULL(1'b0)
-  ) u_rx_cdc (
-    .s_clk         (seg_clk),
-    .s_rstn        (seg_rstn),
-    .s_axis_tdata  (rxq_tdata),
-    .s_axis_tkeep  (rxq_tkeep),
-    .s_axis_tvalid (rxq_tvalid),
-    .s_axis_tready (rxq_tready),
-    .s_axis_tlast  (rxq_tlast),
-    .s_axis_tuser  (rxq_tuser),
-    .m_clk         (rx_clk),
-    .m_rstn        (rx_rstn),
-    .m_axis_tdata  (m_axis_rx_tdata),
-    .m_axis_tkeep  (m_axis_rx_tkeep),
-    .m_axis_tvalid (m_axis_rx_tvalid),
-    .m_axis_tready (1'b1),
-    .m_axis_tlast  (m_axis_rx_tlast),
-    .m_axis_tuser  (m_axis_rx_tuser),
-    .overflow      (rx_cdc_overflow)
-  );
-
-  assign rx_overflow = rx_fifo_overflow | rx_cdc_overflow | rx_align_drop;
+  // The status a client publishes is the whole client's, so a two stream client reports the
+  // sum of its streams' frame counters and the union of their loss flags. rx_align_stat
+  // carries an abort count and a drop count in its two halves and each half is summed.
+  assign rx_overflow = |str_overflow;
+  assign rx_trunc    = |str_trunc;
+  generate
+  if (N_STREAM > 1) begin : g_stat_sum
+    logic [31:0] err_sum, drop_sum;
+    logic [15:0] abort_sum, algn_sum;
+    always_comb begin
+      err_sum   = '0;
+      drop_sum  = '0;
+      abort_sum = '0;
+      algn_sum  = '0;
+      for (int k = 0; k < N_STREAM; k++) begin
+        err_sum   = err_sum   + str_err_frames[k*32 +: 32];
+        drop_sum  = drop_sum  + str_drop_frames[k*32 +: 32];
+        algn_sum  = algn_sum  + str_align_stat[k*32 +: 16];
+        abort_sum = abort_sum + str_align_stat[k*32 + 16 +: 16];
+      end
+    end
+    assign rx_err_frames  = err_sum;
+    assign rx_drop_frames = drop_sum;
+    assign rx_align_stat  = {abort_sum, algn_sum};
+  end else begin : g_stat_one
+    assign rx_err_frames  = str_err_frames[31:0];
+    assign rx_drop_frames = str_drop_frames[31:0];
+    assign rx_align_stat  = str_align_stat[31:0];
+  end
+  endgenerate
 
   logic [DATA_W-1:0]    txf_tdata;
   logic [NET_KEEP-1:0]  txf_tkeep;
@@ -387,12 +345,11 @@ module dcmac_axis_adapter #(
   assign txg_tvalid = txp_tvalid & tx_gate;
   assign txp_tready = txg_tready & tx_gate;
 
-  logic [SEG_BITS-1:0]  txd_tdata;
-  logic [SEG_KEEP-1:0]  txd_tkeep;
-  logic                 txd_tvalid, txd_tready, txd_tlast;
-  logic [TX_USER_W-1:0] txd_tuser;
-
-  eth_axis_dwidth_down #(.IN_W(DATA_W), .OUT_W(SEG_BITS), .USER_W(TX_USER_W)) u_tx_dn (
+  // The packer takes the host bus width directly. Cutting the stream to N_SEG*SEG_W first
+  // quantised a frame to whole segmented cycles, which with one start of packet per cycle
+  // held 65 byte frames at 200G to 0.696 of line rate. The receive direction carried the
+  // same fault through eth_axis_dwidth_up and it is removed there for the same reason.
+  dcmac_seg_axis_tx #(.N_SEG(N_SEG), .SEG_W(SEG_W), .DATA_W(DATA_W)) u_seg_tx (
     .clk           (seg_clk),
     .rstn          (seg_rstn),
     .s_axis_tdata  (txg_tdata),
@@ -400,24 +357,7 @@ module dcmac_axis_adapter #(
     .s_axis_tvalid (txg_tvalid),
     .s_axis_tready (txg_tready),
     .s_axis_tlast  (txg_tlast),
-    .s_axis_tuser  (txg_tuser),
-    .m_axis_tdata  (txd_tdata),
-    .m_axis_tkeep  (txd_tkeep),
-    .m_axis_tvalid (txd_tvalid),
-    .m_axis_tready (txd_tready),
-    .m_axis_tlast  (txd_tlast),
-    .m_axis_tuser  (txd_tuser)
-  );
-
-  dcmac_seg_axis_tx #(.N_SEG(N_SEG), .SEG_W(SEG_W)) u_seg_tx (
-    .clk           (seg_clk),
-    .rstn          (seg_rstn),
-    .s_axis_tdata  (txd_tdata),
-    .s_axis_tkeep  (txd_tkeep),
-    .s_axis_tvalid (txd_tvalid),
-    .s_axis_tready (txd_tready),
-    .s_axis_tlast  (txd_tlast),
-    .s_axis_tuser  (txd_tuser[0]),
+    .s_axis_tuser  (txg_tuser[0]),
     .tx_seg_ready  (tx_seg_ready),
     .tx_seg_valid  (tx_seg_valid),
     .tx_seg_dat    (tx_seg_dat),
@@ -430,13 +370,13 @@ module dcmac_axis_adapter #(
 
   generate
   if (TX_CPL_EN) begin : g_tx_cpl
-    wire tx_eop_accepted = txd_tvalid & txd_tready & txd_tlast;
+    wire tx_eop_accepted = txg_tvalid & txg_tready & txg_tlast;
 
     wire [PTP_TS_W-1:0]  cpl_ts_in  = seg_ptp_time;
 
     wire [TX_TAG_WP-1:0] cpl_tag_in;
     if (TX_TAG_W > 0) begin : g_tag
-      assign cpl_tag_in = txd_tuser[TX_TAG_W:1];
+      assign cpl_tag_in = txg_tuser[TX_TAG_W:1];
     end else begin : g_no_tag
       assign cpl_tag_in = {TX_TAG_WP{1'b0}};
     end

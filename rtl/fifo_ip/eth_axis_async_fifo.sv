@@ -41,8 +41,9 @@ module eth_axis_async_fifo #(
   output logic               overflow
 );
 
-  localparam bit IP_MATCH = (DATA_W == 512) && (KEEP_W == 64) &&
-                            (USER_W == 1)   && (ADDR_W == 9);
+  localparam bit IP_512  = (DATA_W == 512)  && (KEEP_W == 64);
+  localparam bit IP_1024 = (DATA_W == 1024) && (KEEP_W == 128);
+  localparam bit IP_MATCH = (IP_512 || IP_1024) && (USER_W == 1) && (ADDR_W == 9);
 
   generate
   if (DROP_ON_FULL) begin : g_no_drop_on_full
@@ -58,7 +59,7 @@ module eth_axis_async_fifo #(
     initial begin
       $error("eth_axis_async_fifo (IP variant): no generated axis_data_fifo matches this configuration.");
       $display("  DATA_W=%0d KEEP_W=%0d USER_W=%0d ADDR_W=%0d", DATA_W, KEEP_W, USER_W, ADDR_W);
-      $display("  the only IP that exists is nia_fifo_cdc_512x1 (512/64/1/9, IS_ACLK_ASYNC=1).");
+      $display("  the generated IPs are nia_fifo_cdc_512x1 and nia_fifo_cdc_1024x1, both USER_W 1 ADDR_W 9.");
       $display("  Widen ip/dcmac_fifo_ip.tcl AND add a branch here. Do NOT relax this");
       $display("  guard, and do NOT run the PTP/tag variant on the IP variant.");
       $finish;
@@ -66,23 +67,45 @@ module eth_axis_async_fifo #(
   end
   endgenerate
 
-  nia_fifo_cdc_512x1 u_cdc (
-    .s_axis_aresetn (s_rstn),
-    .s_axis_aclk    (s_clk),
-    .s_axis_tvalid  (s_axis_tvalid),
-    .s_axis_tready  (s_axis_tready),
-    .s_axis_tdata   (s_axis_tdata),
-    .s_axis_tkeep   (s_axis_tkeep),
-    .s_axis_tlast   (s_axis_tlast),
-    .s_axis_tuser   (s_axis_tuser),
-    .m_axis_aclk    (m_clk),
-    .m_axis_tvalid  (m_axis_tvalid),
-    .m_axis_tready  (m_axis_tready),
-    .m_axis_tdata   (m_axis_tdata),
-    .m_axis_tkeep   (m_axis_tkeep),
-    .m_axis_tlast   (m_axis_tlast),
-    .m_axis_tuser   (m_axis_tuser)
-  );
+  generate
+  if (IP_1024) begin : g_cdc_1024
+    nia_fifo_cdc_1024x1 u_cdc (
+      .s_axis_aresetn (s_rstn),
+      .s_axis_aclk    (s_clk),
+      .s_axis_tvalid  (s_axis_tvalid),
+      .s_axis_tready  (s_axis_tready),
+      .s_axis_tdata   (s_axis_tdata),
+      .s_axis_tkeep   (s_axis_tkeep),
+      .s_axis_tlast   (s_axis_tlast),
+      .s_axis_tuser   (s_axis_tuser),
+      .m_axis_aclk    (m_clk),
+      .m_axis_tvalid  (m_axis_tvalid),
+      .m_axis_tready  (m_axis_tready),
+      .m_axis_tdata   (m_axis_tdata),
+      .m_axis_tkeep   (m_axis_tkeep),
+      .m_axis_tlast   (m_axis_tlast),
+      .m_axis_tuser   (m_axis_tuser)
+    );
+  end else begin : g_cdc_512
+    nia_fifo_cdc_512x1 u_cdc (
+      .s_axis_aresetn (s_rstn),
+      .s_axis_aclk    (s_clk),
+      .s_axis_tvalid  (s_axis_tvalid),
+      .s_axis_tready  (s_axis_tready),
+      .s_axis_tdata   (s_axis_tdata),
+      .s_axis_tkeep   (s_axis_tkeep),
+      .s_axis_tlast   (s_axis_tlast),
+      .s_axis_tuser   (s_axis_tuser),
+      .m_axis_aclk    (m_clk),
+      .m_axis_tvalid  (m_axis_tvalid),
+      .m_axis_tready  (m_axis_tready),
+      .m_axis_tdata   (m_axis_tdata),
+      .m_axis_tkeep   (m_axis_tkeep),
+      .m_axis_tlast   (m_axis_tlast),
+      .m_axis_tuser   (m_axis_tuser)
+    );
+  end
+  endgenerate
 
   logic ovf_r;
   always_ff @(posedge s_clk) begin

@@ -44,13 +44,28 @@ proc dcmac_create_ips_dual {ip_src_dir} {
     import_ip -quiet "$ip_src_dir/dcmac_0_gtwiz_versal_1.xci"
     import_ip -quiet "$ip_src_dir/dcmac_0_clk_wiz_0.xci"
 
+    # The register plane is 250 MHz whatever the rate, because the DCMAC APB3_CLK requires
+    # 3.333 ns. clk_out3 is the datapath and NIA_USR_MHZ moves only that one. Every rate
+    # generates three outputs, because the PHY wrappers connect clk_out3 at every rate and a
+    # two output wizard is the synthesis error 'named port connection clk_out3 does not exist'.
+    set nia_usr_mhz [expr {[info exists ::env(NIA_USR_MHZ)] ? $::env(NIA_USR_MHZ) : 250}]
+    switch -- $nia_usr_mhz {
+        250     { set nia_usr_freq 250.000 }
+        391     { set nia_usr_freq 390.625 }
+        default {
+            puts "NIA_IP FAIL: NIA_USR_MHZ=$nia_usr_mhz is not one of 250, 391"
+            exit 2
+        }
+    }
+    puts "NIA_IP NET_CLK_MHZ $nia_usr_mhz requested $nia_usr_freq, register plane 250.000"
+
     create_ip -name clk_wizard -vendor xilinx.com -library ip -version 1.0 \
               -module_name dcmac_usr_clk_wiz
     set_property -dict [list \
-        CONFIG.CLKOUT_DRIVES {BUFG,BUFG} \
-        CONFIG.CLKOUT_PORT {clk_out1,clk_out2} \
-        CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY {250.000,100.000} \
-        CONFIG.CLKOUT_USED {true,true} \
+        CONFIG.CLKOUT_DRIVES {BUFG,BUFG,BUFG} \
+        CONFIG.CLKOUT_PORT {clk_out1,clk_out2,clk_out3} \
+        CONFIG.CLKOUT_REQUESTED_OUT_FREQUENCY "250.000,100.000,${nia_usr_freq}" \
+        CONFIG.CLKOUT_USED {true,true,true} \
         CONFIG.PRIM_IN_FREQ {156.250} \
         CONFIG.PRIM_SOURCE {Global_buffer} \
         CONFIG.USE_RESET {true} \

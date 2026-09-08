@@ -112,6 +112,8 @@ module dcmac_pktgen_dual_top #(
   localparam int N_CLIENT = 2;
 
   wire                            seg_clk_i, usr_clk_i;
+
+  wire                     net_clk_i;
   wire [N_CLIENT-1:0]             seg_rstn_i;
 
   wire [N_CLIENT-1:0]             rx_seg_valid, tx_seg_ready, tx_seg_valid;
@@ -400,7 +402,7 @@ module dcmac_pktgen_dual_top #(
   endgenerate
 
   dcmac_phy #(
-    .N_CLIENT(N_CLIENT),
+    .N_CLIENT(N_CLIENT), .GT_LANES(8),
     .N_SEG(N_SEG), .SEG_W(SEG_W), .PORT_MAX(PORT_MAX),
     .LOOPBACK_MODE(LOOPBACK_MODE),
     .ANCHOR_0(ANCHOR_0), .ANCHOR_1(ANCHOR_1),
@@ -421,6 +423,7 @@ module dcmac_pktgen_dual_top #(
     .seg_rstn                (seg_rstn_i),
     .seg_rstn_ctl            (seg_rstn_ctl_i),
     .usr_clk                 (usr_clk_i),
+    .net_clk                 (net_clk_i),
 
     .rx_seg_valid            (rx_seg_valid),
     .rx_seg_dat              (rx_seg_dat),

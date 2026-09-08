@@ -37,8 +37,9 @@ module tx_frame_fifo #(
   output logic [USER_W-1:0]  m_axis_tuser
 );
 
-  localparam bit IP_MATCH = (DATA_W == 512) && (KEEP_W == 64) &&
-                            (USER_W == 1)   && (ADDR_W == 8);
+  localparam bit IP_512  = (DATA_W == 512)  && (KEEP_W == 64);
+  localparam bit IP_1024 = (DATA_W == 1024) && (KEEP_W == 128);
+  localparam bit IP_MATCH = (IP_512 || IP_1024) && (USER_W == 1) && (ADDR_W == 8);
 
   localparam int IP_DEPTH        = 256;
   localparam int MAX_FRAME_BEATS = (MAX_FRAME_B + DATA_W/8 - 1) / (DATA_W/8);
@@ -59,7 +60,7 @@ module tx_frame_fifo #(
     initial begin
       $error("tx_frame_fifo (IP variant): no generated axis_data_fifo matches this configuration.");
       $display("  DATA_W=%0d KEEP_W=%0d USER_W=%0d ADDR_W=%0d", DATA_W, KEEP_W, USER_W, ADDR_W);
-      $display("  the only IP that exists is nia_fifo_pkt_512x1 (512/64/1/8, FIFO_MODE=2).");
+      $display("  the generated IPs are nia_fifo_pkt_512x1 and nia_fifo_pkt_1024x1, both USER_W 1 ADDR_W 8.");
       $display("  Widen ip/dcmac_fifo_ip.tcl AND add a branch here. Do NOT relax this");
       $display("  guard, and do NOT run the PTP/tag variant on the IP variant.");
       $finish;
@@ -69,22 +70,43 @@ module tx_frame_fifo #(
 
   wire [USER_W-1:0] ip_tuser;
 
-  nia_fifo_pkt_512x1 u_pkt (
-    .s_axis_aresetn (rstn),
-    .s_axis_aclk    (clk),
-    .s_axis_tvalid  (s_axis_tvalid),
-    .s_axis_tready  (s_axis_tready),
-    .s_axis_tdata   (s_axis_tdata),
-    .s_axis_tkeep   (s_axis_tkeep),
-    .s_axis_tlast   (s_axis_tlast),
-    .s_axis_tuser   (s_axis_tuser),
-    .m_axis_tvalid  (m_axis_tvalid),
-    .m_axis_tready  (m_axis_tready),
-    .m_axis_tdata   (m_axis_tdata),
-    .m_axis_tkeep   (m_axis_tkeep),
-    .m_axis_tlast   (m_axis_tlast),
-    .m_axis_tuser   (ip_tuser)
-  );
+  generate
+  if (IP_1024) begin : g_pkt_1024
+    nia_fifo_pkt_1024x1 u_pkt (
+      .s_axis_aresetn (rstn),
+      .s_axis_aclk    (clk),
+      .s_axis_tvalid  (s_axis_tvalid),
+      .s_axis_tready  (s_axis_tready),
+      .s_axis_tdata   (s_axis_tdata),
+      .s_axis_tkeep   (s_axis_tkeep),
+      .s_axis_tlast   (s_axis_tlast),
+      .s_axis_tuser   (s_axis_tuser),
+      .m_axis_tvalid  (m_axis_tvalid),
+      .m_axis_tready  (m_axis_tready),
+      .m_axis_tdata   (m_axis_tdata),
+      .m_axis_tkeep   (m_axis_tkeep),
+      .m_axis_tlast   (m_axis_tlast),
+      .m_axis_tuser   (ip_tuser)
+    );
+  end else begin : g_pkt_512
+    nia_fifo_pkt_512x1 u_pkt (
+      .s_axis_aresetn (rstn),
+      .s_axis_aclk    (clk),
+      .s_axis_tvalid  (s_axis_tvalid),
+      .s_axis_tready  (s_axis_tready),
+      .s_axis_tdata   (s_axis_tdata),
+      .s_axis_tkeep   (s_axis_tkeep),
+      .s_axis_tlast   (s_axis_tlast),
+      .s_axis_tuser   (s_axis_tuser),
+      .m_axis_tvalid  (m_axis_tvalid),
+      .m_axis_tready  (m_axis_tready),
+      .m_axis_tdata   (m_axis_tdata),
+      .m_axis_tkeep   (m_axis_tkeep),
+      .m_axis_tlast   (m_axis_tlast),
+      .m_axis_tuser   (ip_tuser)
+    );
+  end
+  endgenerate
 
   logic abort_acc;
   wire  xfer = m_axis_tvalid & m_axis_tready;

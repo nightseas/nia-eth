@@ -32,6 +32,7 @@ add_files -fileset sources_1 [list \
   $rtl/fifo_ip/eth_axis_async_fifo.sv \
   $rtl/fifo_ip/tx_frame_fifo.sv \
   $rtl/ctl/dcmac_mac_ctl_fsm.sv \
+  $rtl/dcmac_axis_rx_stream.sv \
   $rtl/dcmac_axis_adapter.sv \
 ]
 set_property file_type {SystemVerilog} [get_files -of_objects [get_filesets sources_1] *.sv]

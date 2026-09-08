@@ -21,6 +21,28 @@ set ::WINDOW_CLIENT0 0xA4000000
 set ::WINDOW_COMMAND 0xA4001000
 set ::WINDOW_CLIENT1 0xA4002000
 
+# fpga_axispg_dual_top.sv sets N_CLIENT = (RATE == 400) ? 1 : 2 and N_STREAM = (RATE == 400) ? 2 : 1,
+# so N_PG = N_CLIENT * N_STREAM is 2 at every rate and the AXI-Stream top always decodes two
+# generator windows: pg_sel_ar is {block_ar == BLOCK_PKTGEN_1, block_ar == BLOCK_PKTGEN_0}. What
+# changes with the rate is which cage each window feeds. At 100G and 200G window 0 feeds cage 0 and
+# window 1 feeds cage 1. At 400G both windows feed the single cage, because PG_CLIENT = q / N_STREAM
+# is 0 for both. NIA_CLIENTS counts carriers, which is what the link up mask and the alignment field
+# are built from, and it is not the generator window count. One port and one link are checked at
+# 400G; only the generator and checker count is two.
+#
+# The receive side of a 400G cage presents frames to its two checkers in arrival order and carries no
+# stream identity, so a frame sent by window 0 of one board can be counted by either window of the
+# other. Byte exactness at 400G is therefore the sum over the windows of a cage, and comparing per
+# window reads exactly half of what was sent.
+#
+# CAUTION: the segmented one cage top, tu03_pktgen_400g_top.sv, declares BLOCK_PKTGEN_0 and
+# BLOCK_COMMAND only, and its host_arready is pg_sel_ar ? pg_arready : (cmd_sel_ar && ...), so an
+# access to block 2 asserts arready never and wedges the debug port until the board is reprogrammed.
+# The second window is therefore enabled for the AXI-Stream instrument alone, in identify_instrument
+# once the module type has been read, and these defaults keep one window a cage until then.
+set ::twoboard_stream_count 1
+set ::twoboard_pg_count     $::twoboard_client_count
+
 set ::MODULE_TYPE_SEG  0x4E535047
 set ::MODULE_TYPE_AXIS 0x4E415047
 
@@ -63,6 +85,13 @@ set ::CMD_RXPHY     0x10
 set ::CMD_RETRY     0x14
 set ::CMD_STAT_DATA 0x18
 set ::CMD_MAC_FSM   0x1C
+
+# The adapter status set is read through the indexed window of the command block: write the
+# index, then read the data word.
+proc command_stat_read {board index} {
+  board_write $board [expr {$::WINDOW_COMMAND + $::CMD_STAT_IDX}] $index
+  return [board_read $board [expr {$::WINDOW_COMMAND + $::CMD_STAT_DATA}]]
+}
 
 set ::CMD_BIT_RESTART        0x01
 set ::CMD_BIT_STATS          0x02
@@ -222,10 +251,12 @@ proc board_write {board address value} {
 }
 
 proc client_window {client} {
-  if {$client != 0 && $client >= $::twoboard_client_count} {
-    error "client_window: client $client requested on a NIA_CLIENTS=$::twoboard_client_count image.\
- A one client top decodes register blocks 0 and 1 only, and a read of block 2 asserts no arready: it\
- stalls at the address phase and wedges the debug port until the board is reprogrammed. Refused."
+  if {$client != 0 && $client >= $::twoboard_pg_count} {
+    error "client_window: generator window $client requested on an image with\
+ $::twoboard_pg_count window(s), NIA_CLIENTS=$::twoboard_client_count and\
+ $::twoboard_stream_count stream(s) a cage. A one client top decodes register blocks 0 and 1 only,\
+ and a read of block 2 asserts no arready: it stalls at the address phase and wedges the debug port\
+ until the board is reprogrammed. Refused."
   }
   return [expr {$client == 0 ? $::WINDOW_CLIENT0 : $::WINDOW_CLIENT1}]
 }
@@ -238,6 +269,25 @@ proc cage_list {} {
   set cages {}
   for {set client 0} {$client < $::twoboard_client_count} {incr client} { lappend cages $client }
   return $cages
+}
+
+# The generator windows, which is what a burst drives and what a counter read addresses.
+proc pg_list {} {
+  set pgs {}
+  for {set pg 0} {$pg < $::twoboard_pg_count} {incr pg} { lappend pgs $pg }
+  return $pgs
+}
+
+# The cage a generator window feeds.
+proc pg_cage {pg} {
+  return [expr {$::twoboard_stream_count > 1 ? 0 : $pg}]
+}
+
+# The generator windows that feed one cage. One window a cage at 100G and 200G, both at 400G.
+proc cage_pgs {cage} {
+  set pgs {}
+  foreach pg [pg_list] { if {[pg_cage $pg] == $cage} { lappend pgs $pg } }
+  return $pgs
 }
 
 proc cage_label {cage} { return [expr {$cage == 0 ? "QSFP0" : "QSFP1"}] }
@@ -268,6 +318,17 @@ proc identify_instrument {} {
     }
     set ::twoboard_segments [expr {$data_width / 256}]
     set geometry_detail "AXIS_GEOMETRY DATA_W $data_width KEEP_W $keep_width"
+    set ::twoboard_rate_from_env 0
+    if {[info exists ::env(NIA_LINE_GBPS)]} {
+      set ::twoboard_segments [expr {$::env(NIA_LINE_GBPS) / 50}]
+      set ::twoboard_rate_from_env 1
+    } elseif {$data_width >= 1024} {
+      puts "TWOBOARD FAIL: AXIS_GEOMETRY reports DATA_W $data_width, and the AXI-Stream instrument\
+ publishes the stream width rather than the line rate. A 200G client and a 400G client both present\
+ 1024 bits, four segments of 128 against eight of 128, so the rate cannot be derived here. Set\
+ NIA_LINE_GBPS to the rate of the image under test; NIA_RATE in its image_props.txt carries it."
+      exit 2
+    }
   } else {
     set ::twoboard_segments [expr {($geometry >> 16) & 0xFFFF}]
     set geometry_detail "SEG_GEOMETRY N_SEG $::twoboard_segments SEG_W [expr {$geometry & 0xFFFF}]"
@@ -285,8 +346,21 @@ proc identify_instrument {} {
 
   puts "TWOBOARD INSTRUMENT $instrument_name MODULE_TYPE [format 0x%08X $module_type]\
  MAP_VERSION [format 0x%08X $map_version] $geometry_detail"
-  puts "TWOBOARD RATE ${::twoboard_line_gbps}GAUI-[expr {$::twoboard_segments / 2}]\
- line rate $::twoboard_line_gbps Gb/s clients $::twoboard_client_count cages [cage_list]"
+  set rate_source [expr {[info exists ::twoboard_rate_from_env] && $::twoboard_rate_from_env \
+                         ? "NIA_LINE_GBPS" : "the geometry register"}]
+  puts "TWOBOARD RATE line rate $::twoboard_line_gbps Gb/s from $rate_source, segments\
+ $::twoboard_segments, clients $::twoboard_client_count, cages [cage_list]. The electrical lane count\
+ is not in the register map, so the GAUI variant is not named here."
+
+  if {$::twoboard_is_axis && $::twoboard_client_count == 1} {
+    set ::twoboard_stream_count 2
+    set ::twoboard_pg_count     2
+    puts "TWOBOARD STREAMS the AXI-Stream one cage top sets N_STREAM 2, so it decodes two generator\
+ windows on the single cage: [pg_list] on cage [pg_cage 0]. One port and one link are checked, and\
+ byte exactness is the sum over both windows."
+  } else {
+    puts "TWOBOARD STREAMS one generator window a cage, windows [pg_list] on cages [cage_list]."
+  }
 
   set far_module_type [board_read B [expr {$::WINDOW_CLIENT0 + $::REG_MODULE_TYPE}]]
   set far_geometry    [board_read B [expr {$::WINDOW_CLIENT0 + $::REG_GEOMETRY}]]
@@ -356,6 +430,7 @@ proc generator_counters {board client} {
   set counters(rx_err_frames) [board_read $board [expr {$window + $::REG_RX_ERR_FRAMES}]]
   set counters(mismatch)      [board_read $board [expr {$window + $::REG_RX_MISMATCH_BEATS}]]
   set counters(status)        [board_read $board [expr {$window + $::REG_STATUS}]]
+  set counters(align_stat)    [command_stat_read $board [expr {0x0E + $client}]]
   set counters(rounds)        [board_read $board [expr {$window + $::REG_SNAPSHOT_ROUNDS}]]
   set counters(stall_cycle)   [expr {$::twoboard_is_axis \
                                      ? 0 \

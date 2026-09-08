@@ -15,20 +15,28 @@
 module tu03_axispg_dual_top #(
 
   parameter integer HOST_ADDR_W   = 16,
+  parameter integer RATE          = 100,
+  // The electrical lane count of one client, 2 or 4 at 200G. It sets the serial pin count of
+  // the device. A 200GAUI-4 cage and a 200GAUI-2 cage each occupy one quad, so GAUI selects
+  // the transceiver preset of the IP and no geometry of this module.
+  parameter integer GAUI          = 2,
   parameter integer DATA_W        = 512,
   parameter integer LOOPBACK_MODE = 0,
   parameter integer LEN_MIN_HW    = 64,
-  parameter integer LEN_MAX_HW    = 9018
+  parameter integer LEN_MAX_HW    = 9018,
+  parameter integer USR_MHZ       = 250,
+
+  parameter integer GT_LANES      = 8
 )(
 
-  input  wire        gt_ref_clk0_p,
-  input  wire        gt_ref_clk0_n,
-  input  wire        gt_ref_clk1_p,
-  input  wire        gt_ref_clk1_n,
-  input  wire [7:0]  gt_rxp_in,
-  input  wire [7:0]  gt_rxn_in,
-  output wire [7:0]  gt_txn_out,
-  output wire [7:0]  gt_txp_out
+  input  wire                  gt_ref_clk0_p,
+  input  wire                  gt_ref_clk0_n,
+  input  wire                  gt_ref_clk1_p,
+  input  wire                  gt_ref_clk1_n,
+  input  wire [GT_LANES-1:0]   gt_rxp_in,
+  input  wire [GT_LANES-1:0]   gt_rxn_in,
+  output wire [GT_LANES-1:0]   gt_txn_out,
+  output wire [GT_LANES-1:0]   gt_txp_out
 );
 
   wire        usr_clk, usr_rstn, pl_resetn;
@@ -67,11 +75,15 @@ module tu03_axispg_dual_top #(
   );
 
   fpga_axispg_dual_top #(
+    .RATE          (RATE),
+    .GAUI          (GAUI),
+    .GT_LANES      (GT_LANES),
     .DATA_W        (DATA_W),
     .LOOPBACK_MODE (LOOPBACK_MODE),
     .HOST_ADDR_W   (HOST_ADDR_W),
     .LEN_MIN_HW    (LEN_MIN_HW),
-    .LEN_MAX_HW    (LEN_MAX_HW)
+    .LEN_MAX_HW    (LEN_MAX_HW),
+    .USR_MHZ       (USR_MHZ)
   ) u_instrument (
     .sys_reset       (sys_reset),
 

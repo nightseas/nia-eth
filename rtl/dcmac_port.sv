@@ -16,6 +16,7 @@
 module dcmac_port #(
 
   parameter integer N_SEG      = 2,
+  parameter integer N_STREAM   = 1,
   parameter integer SEG_W      = 128,
   parameter integer DATA_W     = 512,
 
@@ -38,6 +39,7 @@ module dcmac_port #(
   input  wire                    seg_clk,
   input  wire                    seg_rstn,
   input  wire                    usr_clk,
+  input  wire                    net_clk,
 
   output wire                    tx_clk,
   output wire                    tx_rst,
@@ -58,11 +60,11 @@ module dcmac_port #(
   output wire [PTP_TS_W-1:0]     m_axis_tx_cpl_ts,
   output wire [TX_TAG_WP-1:0]    m_axis_tx_cpl_tag,
 
-  output wire [DATA_W-1:0]       m_axis_rx_tdata,
-  output wire [DATA_W/8-1:0]     m_axis_rx_tkeep,
-  output wire                    m_axis_rx_tvalid,
-  output wire                    m_axis_rx_tlast,
-  output wire [RX_USER_W-1:0]    m_axis_rx_tuser,
+  output wire [N_STREAM*DATA_W-1:0]     m_axis_rx_tdata,
+  output wire [N_STREAM*DATA_W/8-1:0]   m_axis_rx_tkeep,
+  output wire [N_STREAM-1:0]            m_axis_rx_tvalid,
+  output wire [N_STREAM-1:0]            m_axis_rx_tlast,
+  output wire [N_STREAM*RX_USER_W-1:0]  m_axis_rx_tuser,
 
   input  wire [PTP_TS_W-1:0]     seg_ptp_time,
 
@@ -99,8 +101,11 @@ module dcmac_port #(
   input  wire                    ctl_tx_enable
 );
 
-  assign tx_clk = usr_clk;
-  assign rx_clk = usr_clk;
+  // The adapter's host side runs on the datapath clock, which is 250 MHz or 390.625 MHz.
+  // usr_clk is the register plane and stays at 250 MHz whatever the rate, because the DCMAC
+  // hard block's APB3_CLK requires 3.333 ns.
+  assign tx_clk = net_clk;
+  assign rx_clk = net_clk;
 
   (* ASYNC_REG = "TRUE" *) reg [2:0] tx_rstn_sr = 3'b000;
   (* ASYNC_REG = "TRUE" *) reg [2:0] rx_rstn_sr = 3'b000;
@@ -111,7 +116,7 @@ module dcmac_port #(
   assign usr_rstn = tx_rstn_i;
 
   dcmac_axis_adapter #(
-    .N_SEG(N_SEG), .SEG_W(SEG_W), .DATA_W(DATA_W),
+    .N_SEG(N_SEG), .SEG_W(SEG_W), .DATA_W(DATA_W), .N_STREAM(N_STREAM),
     .PTP_TS_EN(PTP_TS_EN), .PTP_TS_W(PTP_TS_W), .TX_TAG_W(TX_TAG_W),
     .RX_FIFO_AW(RX_FIFO_AW), .RX_CDC_AW(RX_CDC_AW),
     .TX_FIFO_AW(TX_FIFO_AW), .TX_CDC_AW(TX_CDC_AW), .TX_CPL_AW(TX_CPL_AW)

@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.g100
+# Description : The transmit segment packer set at the 100G geometry: 2 segments of 128 bits
+#               against a 512 bit host stream.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_seg_pack_g100
+COCOTB_RESULTS_FILE ?= results_seg_pack_g100.xml
+
+N_SEG   := 2
+DATA_W  := 512
+FIFO_AW := 11
+
+VERILOG_SOURCES :=
+
+include $(dir $(lastword $(MAKEFILE_LIST)))Makefile

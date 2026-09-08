@@ -22,12 +22,14 @@ RTL_DIR := $(shell pwd)/../../rtl
 export PYTHONPATH := $(shell pwd):$(shell pwd)/..:$(PYTHONPATH)
 
 VERILOG_SOURCES := \
-  $(RTL_DIR)/dcmac_seg_axis_adapter.sv \
+  $(RTL_DIR)/dcmac_seg_axis_rx.sv \
+                   $(RTL_DIR)/dcmac_seg_axis_adapter.sv \
   $(RTL_DIR)/eth_axis_dwidth.sv \
   $(MODEL_DIR)/eth_axis_async_fifo.sv \
   $(RTL_DIR)/dcmac_axis_frame_fifo.sv \
   $(MODEL_DIR)/tx_frame_fifo.sv \
   $(RTL_DIR)/ctl/dcmac_mac_ctl_fsm.sv \
+  $(RTL_DIR)/dcmac_axis_rx_stream.sv \
   $(RTL_DIR)/dcmac_axis_adapter.sv \
   $(TB_DIR)/tb_dcmac_adapter_link.sv
 

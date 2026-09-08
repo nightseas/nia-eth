@@ -168,12 +168,33 @@ async def test_ns20_golden_trace_two_groups(dut):
                     f"trace_dual_*_{tag}.txt")
         raise AssertionError(" golden trace length mismatch")
 
-    assert len(got) == len(exp), (
-        f"configuration must END at B11, and {len(got) - len(exp)} write(s) follow it. "
-        f"First extra: {got[len(exp)]}.  makes the program a straight line that halts; a write "
-        f"after B11 means a record survived the truncation.")
-    cocotb.log.info(": %d config writes across %d group(s) matched the document exactly",
-                    len(exp), N_GROUP)
+    # What follows B11 is B17's statistics tick, and nothing else. PG369 page 101: a tick event is
+    # triggered by a rising edge on the per-port tx_port_pm_tick[5:0] pin "or by writing a 1 to the
+    # tick register of a given port through the AXI4-Lite interface". Those pins are tied to 6'b0 at
+    # every wrapper in this repository, so the register write is the only live route and without it
+    # the DCMAC latches no snapshot and every counter behind it reads zero.
+    #
+    # This assertion previously read "configuration must END at B11" and required len(got) ==
+    # len(exp), on the premise that pmtick is a pin and not a register. That premise is wrong, it
+    # removed the only working route, and the FEC counters read zero on hardware for a month as a
+    # result. The property worth protecting is not "nothing follows B11" but "exactly the tick
+    # follows B11", which is what is asserted here and is the stronger of the two.
+    tick = GD.pmtick_dual(anchors=ANCHORS, nports=NPORTS_L)
+    tail = got[len(exp):]
+    assert len(tail) == len(tick), (
+        f"exactly {len(tick)} write(s) of B17's statistics tick shall follow B11, 2 per port over "
+        f"{len(GROUP_PORTS)} port(s), and {len(tail)} write(s) were seen. A short tail means the "
+        f"pmtick block is missing or truncated, which leaves every counter behind the DCMAC "
+        f"snapshot reading zero. A long tail means a record survived the truncation. "
+        f"Tail: {tail[:6]}")
+    for i, (g, e) in enumerate(zip(tail, tick)):
+        assert g == e, (
+            f"B17 PMTICK MISMATCH at tick write {i}: got ({g[0]} 0x{g[1]:05x} 0x{g[2]:08x}) "
+            f"expected ({e[0]} 0x{e[1]:05x} 0x{e[2]:08x}). The block shall write 0x1 to O_TICK_RX "
+            f"then O_TICK_TX for every port of every group, in group then port order. "
+            f"Transcripts in {d}/trace_dual_*_{tag}.txt")
+    cocotb.log.info("%d config write(s) across %d group(s) matched the document exactly, "
+                    "followed by %d B17 pmtick write(s)", len(exp), N_GROUP, len(tick))
     _disarm("test_ns20_golden_trace_two_groups", t0)
 
 @cocotb.test(timeout_time=TIMEOUT_US, timeout_unit="us")

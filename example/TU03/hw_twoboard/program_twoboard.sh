@@ -15,7 +15,15 @@
 set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-BIN="${NIA_VIVADO_BIN:-vivado}"
+if [ -n "${NIA_VIVADO_BIN:-}" ]; then
+	BIN="$NIA_VIVADO_BIN"
+elif command -v vivado >/dev/null 2>&1; then
+	BIN=vivado
+elif command -v vivado_lab >/dev/null 2>&1; then
+	BIN=vivado_lab
+else
+	BIN=vivado
+fi
 HW_URL="${HW_URL:-localhost:3121}"
 DEVICE="${DEVICE:-xcvp1552}"
 SERIAL_A="${SERIAL_A:-}"

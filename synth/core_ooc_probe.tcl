@@ -18,6 +18,8 @@ if {$variant eq ""} { set variant A }
 switch -- $variant {
   A { set seg_per 2.558 ; set tx_per 3.104 ; set rx_per 3.104 ; set nm "tx=rx=322.265625MHz" }
   X { set seg_per 2.558 ; set tx_per 3.104 ; set rx_per 4.000 ; set nm "tx=322.265625 rx=250MHz" }
+  U250 { set seg_per 2.558 ; set tx_per 4.000 ; set rx_per 4.000 ; set nm "host stream 250MHz both directions" }
+  U391 { set seg_per 2.558 ; set tx_per 2.558 ; set rx_per 2.558 ; set nm "host stream 390.625MHz both directions" }
   default { puts "PROBE_ERROR unknown variant $variant" ; exit 1 }
 }
 
@@ -40,10 +42,17 @@ read_verilog -sv [list \
   $rtl/dcmac_axis_frame_fifo.sv \
   $model/tx_frame_fifo.sv \
   $rtl/ctl/dcmac_mac_ctl_fsm.sv \
+  $rtl/dcmac_axis_rx_stream.sv \
   $rtl/dcmac_axis_adapter.sv ]
 
+# The image builds PTP_TS_EN 0 and TX_TAG_W 0, so the transmit completion crossing does not
+# exist there. Leaving them on in the probe measures a model FIFO the image never
+# instantiates, which is how the probe came to bind on g_tx_cpl.u_tx_cpl_cdc.
+set ptp [expr {[info exists env(NIA_OOC_PTP)] ? $env(NIA_OOC_PTP) : 1}]
+set tag [expr {$ptp != 0 ? 16 : 0}]
+puts "PROBE_CPL ptp=$ptp tx_tag=$tag"
 synth_design -top dcmac_axis_adapter -part $part -mode out_of_context \
-             -generic PTP_TS_EN=1 -generic PTP_TS_W=80 -generic TX_TAG_W=16 \
+             -generic PTP_TS_EN=$ptp -generic PTP_TS_W=80 -generic TX_TAG_W=$tag \
              -generic N_SEG=$n_seg -generic DATA_W=$data_w \
              -verilog_define DCMAC_FRAME_FIFO_BRAM
 

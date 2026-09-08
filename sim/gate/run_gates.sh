@@ -49,6 +49,14 @@ for g in \
 	sim/gate/gate_ctl_seq_waits.py \
 	sim/gate/gate_param_overrides.py \
 	sim/gate/gate_seg_sum_saturation.py \
+	sim/gate/gate_image_source_selection.py \
+	sim/gate/gate_stream_rate.py \
+	sim/gate/gate_tcl_syntax.py \
+	sim/gate/gate_tcl_var_kind.py \
+	sim/gate/gate_flow_defaults.py \
+	sim/gate/gate_port_width_params.py \
+	sim/gate/gate_instrument_elab.py \
+	sim/gate/gate_done_mask_matches_phy.py \
 	sim/gate/preflight_anchors.py
 do
 	if [ -f "$g" ]; then
@@ -56,6 +64,14 @@ do
 		*gate_datapath_owns_no_reset.py) run_gate "$g" rtl ;;
 		*gate_elaborate_sets.py) run_gate "$g" . ;;
 		*gate_ctl_seq_groups.py|*gate_ctl_seq_waits.py|*preflight_anchors.py) run_gate "$g" ;;
+		*gate_image_source_selection.py) run_gate "$g" ;;
+		*gate_port_width_params.py) run_gate "$g" "$ROOT" ;;
+		*gate_flow_defaults.py) run_gate "$g" "$ROOT" ;;
+		*gate_done_mask_matches_phy.py) run_gate "$g" "$ROOT" ;;
+		*gate_tcl_var_kind.py) run_gate "$g" "$ROOT" ;;
+		*gate_tcl_syntax.py) run_gate "$g" "$ROOT" ;;
+		*gate_stream_rate.py) run_gate "$g" ;;
+		*gate_instrument_elab.py) run_gate "$g" ;;
 		*gate_seg_sum_saturation.py) run_gate "$g" ;;
 		*) run_gate "$g" "$ROOT" ;;
 		esac

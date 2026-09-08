@@ -45,6 +45,7 @@ add_files -norecurse [list \
   $rtl/dcmac_axis_frame_fifo.sv \
   $rtl/ctl/dcmac_mac_ctl_fsm.sv \
   $rtl/rst_sync.sv \
+  $rtl/dcmac_axis_rx_stream.sv \
   $rtl/dcmac_axis_adapter.sv \
   $rtl/dcmac_sync2.sv \
   $rtl/dcmac_port.sv \

@@ -34,7 +34,16 @@ module dcmac_phy #(
   parameter logic [7:0] POLARITY_TX_Q0 = dcmac_ctl_pkg::QSFP0_TXPOLARITY,
   parameter logic [7:0] POLARITY_RX_Q0 = dcmac_ctl_pkg::QSFP0_RXPOLARITY,
   parameter logic [7:0] POLARITY_TX_Q1 = dcmac_ctl_pkg::QSFP1_TXPOLARITY,
-  parameter logic [7:0] POLARITY_RX_Q1 = dcmac_ctl_pkg::QSFP1_RXPOLARITY
+  parameter logic [7:0] POLARITY_RX_Q1 = dcmac_ctl_pkg::QSFP1_RXPOLARITY,
+  parameter logic [7:0] POLARITY_TX_Q2 = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_RX_Q2 = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_TX_Q3 = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_RX_Q3 = 8'b0000_0000,
+
+  // The transceiver serial pin count of the whole image, four a quad. Every implementation
+  // of dcmac_phy declares it, because choosing between them is a file list swap and their
+  // port lists shall stay identical.
+  parameter int         GT_LANES = 8
 )(
 
   input  wire                              sys_reset,
@@ -44,16 +53,17 @@ module dcmac_phy #(
   input  wire                              gt_ref_clk1_p,
   input  wire                              gt_ref_clk1_n,
 
-  input  wire [4*N_CLIENT-1:0]             gt_rxp_in,
-  input  wire [4*N_CLIENT-1:0]             gt_rxn_in,
-  output wire [4*N_CLIENT-1:0]             gt_txn_out,
-  output wire [4*N_CLIENT-1:0]             gt_txp_out,
+  input  wire [GT_LANES-1:0]             gt_rxp_in,
+  input  wire [GT_LANES-1:0]             gt_rxn_in,
+  output wire [GT_LANES-1:0]             gt_txn_out,
+  output wire [GT_LANES-1:0]             gt_txp_out,
 
   output wire                              seg_clk,
 
   output wire [N_CLIENT-1:0]                seg_rstn,
   output wire                               seg_rstn_ctl,
   output wire                              usr_clk,
+  output wire                              net_clk,
 
   output wire [N_CLIENT-1:0]               rx_seg_valid,
   output wire [N_CLIENT*N_SEG*SEG_W-1:0]   rx_seg_dat,
@@ -115,6 +125,9 @@ module dcmac_phy #(
   wire stub_clk = gt_ref_clk0_p;
   assign seg_clk = stub_clk;
   assign usr_clk = stub_clk;
+  // The stub has one clock, so the register plane and the datapath share it here. The rate
+  // wrappers give the datapath its own clk_out3.
+  assign net_clk = stub_clk;
 
   reg rstn_r = 1'b0, rstn_rr = 1'b0;
   always_ff @(posedge stub_clk) begin
@@ -128,10 +141,11 @@ module dcmac_phy #(
                    LOOPBACK_MODE, ANCHOR_0[0], ANCHOR_1[0], RX_DP_RESET_MIN_CYCLES[0],
                    EN_DPRST_SYNC[0], TX_MAINCURSOR[0], TX_PRECURSOR[0], TX_POSTCURSOR[0],
                    POLARITY_TX_Q0[0], POLARITY_RX_Q0[0], POLARITY_TX_Q1[0], POLARITY_RX_Q1[0],
+                   POLARITY_TX_Q2[0], POLARITY_RX_Q2[0], POLARITY_TX_Q3[0], POLARITY_RX_Q3[0],
                    ctl_rx_force_resync, ctl_tx_send_idle, ctl_tx_send_lfi, ctl_tx_send_rfi,
                    tx_datapath_reset};
-  assign gt_txn_out = {(4*N_CLIENT){1'b0}};
-  assign gt_txp_out = {(4*N_CLIENT){1'b0}};
+  assign gt_txn_out = {GT_LANES{1'b0}};
+  assign gt_txp_out = {GT_LANES{1'b0}};
 
   wire [N_CLIENT-1:0] phy_align_scripted;
 
@@ -269,13 +283,44 @@ end else begin : g_loopback
 
     wire acc      = tx_seg_valid[c] & tx_seg_ready[c];
     wire beat_dat = |tena;
-    wire beat_sop = |(tsop & tena);
-    wire beat_eop = |(teop & tena);
 
     reg in_frame = 1'b0;
     reg hunting  = 1'b1;
 
-    wire fwd_ok = beat_dat & (in_frame ? ~beat_sop : beat_sop);
+    // PG369 permits a start of packet on any segment provided a frame is not already open
+    // at that segment, so a beat may carry the end of one frame and the start of the next.
+    // The beat is walked segment by segment to decide whether it is well formed and whether
+    // a frame is left open after it. A beat that carries a start of packet while a frame is
+    // open at that segment, an end of packet with no frame open, or data on a segment with
+    // no frame open, is malformed. The enables shall be a contiguous run from segment 0.
+    logic beat_form_ok;
+    logic beat_open_after;
+
+    always_comb begin
+      logic frame_open;
+      logic run_ended;
+      frame_open      = in_frame;
+      beat_form_ok    = beat_dat;
+      run_ended       = 1'b0;
+      for (int s = 0; s < N_SEG; s++) begin
+        if (!tena[s]) begin
+          run_ended = 1'b1;
+        end else begin
+          if (run_ended)              beat_form_ok = 1'b0;
+          if (tsop[s]) begin
+            if (frame_open)           beat_form_ok = 1'b0;
+            frame_open = 1'b1;
+          end else if (!frame_open)   beat_form_ok = 1'b0;
+          if (teop[s]) begin
+            if (!frame_open)          beat_form_ok = 1'b0;
+            frame_open = 1'b0;
+          end
+        end
+      end
+      beat_open_after = frame_open;
+    end
+
+    wire fwd_ok = beat_form_ok;
     wire fwd    = acc & fwd_ok & ctl_rx_enable[c];
     wire viol   = acc & ~fwd_ok & ~hunting;
 
@@ -284,7 +329,7 @@ end else begin : g_loopback
         in_frame <= 1'b0;
         hunting  <= 1'b1;
       end else if (acc && fwd_ok) begin
-        in_frame <= ~beat_eop;
+        in_frame <= beat_open_after;
         hunting  <= 1'b0;
       end
     end

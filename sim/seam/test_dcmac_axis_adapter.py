@@ -41,6 +41,8 @@ TX_CPL_EN = bool(PTP_TS_EN) or TX_TAG_W > 0
 
 DATA_W = int(os.environ.get("DATA_W", str(2 * N_SEG * SEG_W)))
 BYTE_LANES = DATA_W // 8
+SEG_BEAT_B = N_SEG * SEG_W // 8
+GEOM_SCALE = N_SEG // 2
 
 TX_MHZ = float(os.environ.get("TX_MHZ", "250"))
 RX_MHZ = float(os.environ.get("RX_MHZ", "250"))
@@ -598,7 +600,7 @@ async def test_rx_overflow_sticky(dut):
     src = SegmentedSource(dut, dut.seg_clk, N_SEG, SEG_W)
 
     assert int(dut.rx_overflow.value) == 0, " rx_overflow sticky before any traffic"
-    for _ in range(80):
+    for _ in range(80 * GEOM_SCALE):
         await src.send(_rand_frame(1518))
     await ClockCycles(dut.seg_clk, 20)
 
@@ -735,10 +737,10 @@ async def test_rx_err_midframe_flagged_on_tlast(dut):
     good0, good1, good2 = _rand_frame(64), _rand_frame(300), _rand_frame(1518)
     bad_first = _rand_frame(256)
     bad_mid = _rand_frame(512)
-    bad_seg1 = _rand_frame(128)
+    bad_seg1 = _rand_frame(2 * SEG_BEAT_B)
 
     order = [(good0, None, 0), (bad_first, 0, 0), (good1, None, 0),
-             (bad_mid, 5, 0), (good2, None, 0), (bad_seg1, 1, 1)]
+             (bad_mid, -2, 0), (good2, None, 0), (bad_seg1, 1, 1)]
     for f, eb, es in order:
         await src.send(f, err_beat=eb, err_seg=es)
         await src.idle_cycles(2)
@@ -791,7 +793,12 @@ async def test_ns4_flag_with_selected_frame_fifo_storage(dut):
     want_bram = os.environ.get("FF_BRAM", "0") == "1"
 
     adapter = dut.u_adapter if hasattr(dut, "u_adapter") else dut
-    ff = adapter.u_rx_frame_fifo
+    # The receive chain of one stream lives in dcmac_axis_rx_stream, one instance per stream
+    # port, so the frame FIFO is one level further down than it was.
+    if hasattr(adapter, "u_rx_frame_fifo"):
+        ff = adapter.u_rx_frame_fifo
+    else:
+        ff = adapter.g_rx_stream[0].u_rx_stream.u_rx_frame_fifo
     have_bram = hasattr(ff, "g_bram_read")
     assert have_bram == want_bram, (
         f"FF_BRAM={os.environ.get('FF_BRAM')} but g_bram_read "
@@ -953,13 +960,13 @@ async def test_rx_frames_whole_under_slow_rxclk(dut):
 
     lens = [64, 65, 63, 128, 129, 1518, 97, 512, 511, 66, 1500, 64,
             333, 1024, 127, 200, 65, 999, 64, 1518]
-    REPS = 20
+    REPS = 20 * GEOM_SCALE
     frames = [_rand_frame(n) for _ in range(REPS) for n in lens]
 
     for f in frames:
         await src.send(f)
     await src.idle_cycles(4)
-    await ClockCycles(dut.rx_clk, 4000)
+    await ClockCycles(dut.rx_clk, 4000 * GEOM_SCALE)
 
     got = [g[0] for g in _drain(mon)]
 

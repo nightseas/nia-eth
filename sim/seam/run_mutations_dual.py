@@ -33,9 +33,10 @@ NPORTS2 = dict(BASE, NPORTS_C0="2", ANCHOR_C0="0", NPORTS_C1="2", ANCHOR_C1="2")
 
 FSM = "ctl/dcmac_mac_ctl_fsm.sv"
 ADAPTER = "dcmac_seg_axis_adapter.sv"
+SEG_RX  = "dcmac_seg_axis_rx.sv"
 
 A_GROUP_MASK = ("      if (p >= ANCHOR && p < (ANCHOR + NPORTS)) port_group_mask[p] = 1'b1;")
-A_RX_SEG_ENA = "      if (rx_seg_ena[s])\n"
+A_RX_SEG_ENA = "      in_take[s] = rx_seg_valid & rx_seg_ena[s];\n"
 
 MUTANTS = [
     dict(
@@ -69,9 +70,9 @@ MUTANTS = [
         expect=["test_ns21_group_masks_disjoint_and_owned"],
     ),
     dict(
-        id="D4", status="applicable", file=ADAPTER, variant=BASE,
-        anchor=A_RX_SEG_ENA,
-        replace="      if (rx_seg_ena[s] && s == 0)\n",
+        id="D4", status="applicable", file=SEG_RX, variant=BASE,
+        anchor="          slot_load_next[write_slot_next] = 1'b1;",
+        replace="          slot_load_next[write_slot_next] = (lane == 0);\n",
         clause=" / ",
         what="A lost segment on the RX seam. Scored here not because it is new - the "
               "single-client M1 covers the mechanism - but because it must fail the CONCURRENT "

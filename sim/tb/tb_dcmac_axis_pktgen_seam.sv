@@ -14,6 +14,9 @@
 `timescale 1ns/1ps
 
 module tb_dcmac_axis_pktgen_seam #(
+  // The register plane and the traffic plane are one clock at 250 MHz and two when the
+  // datapath runs at 390.625 MHz, so both arrangements are simulated.
+  parameter int SAME_CLOCK = 1,
   parameter integer DATA_W      = 512,
   parameter integer AXIL_ADDR_W = 12,
   parameter integer LEN_MIN_HW  = 64,
@@ -62,13 +65,6 @@ module tb_dcmac_axis_pktgen_seam #(
   wire                tx_tready_i;
   wire                tx_tlast_i;
   wire                tx_tuser;
-
-  wire [SEG_BITS-1:0] dn_tdata;
-  wire [SEG_KEEP-1:0] dn_tkeep;
-  wire                dn_tvalid;
-  wire                dn_tready;
-  wire                dn_tlast;
-  wire                dn_tuser;
 
   wire                seg_valid;
   wire [SEG_BITS-1:0] seg_dat;
@@ -121,13 +117,7 @@ module tb_dcmac_axis_pktgen_seam #(
   end
   endgenerate
 
-  wire [SEG_BITS-1:0] up_tdata;
-  wire [SEG_KEEP-1:0] up_tkeep;
-  wire                up_tvalid;
-  wire                up_tready;
   wire                rx_align_drop;
-  wire                up_tlast;
-  wire                up_tuser;
 
   wire [DATA_W-1:0]   rx_tdata;
   wire [DATA_W/8-1:0] rx_tkeep;
@@ -140,7 +130,7 @@ module tb_dcmac_axis_pktgen_seam #(
     .TX_USER_W   (1),
     .RX_USER_W   (1),
     .AXIL_ADDR_W (AXIL_ADDR_W),
-    .SAME_CLOCK  (1'b1),
+    .SAME_CLOCK  (SAME_CLOCK[0]),
     .LEN_MIN_HW  (LEN_MIN_HW),
     .LEN_MAX_HW  (LEN_MAX_HW)
   ) u_pktgen (
@@ -179,7 +169,10 @@ module tb_dcmac_axis_pktgen_seam #(
     .s_axil_rready    (s_axil_rready)
   );
 
-  eth_axis_dwidth_down #(.IN_W(DATA_W), .OUT_W(SEG_BITS), .USER_W(1)) u_tx_dn (
+  // The packer takes the host bus width and the receive conversion presents it, as
+  // dcmac_axis_adapter does. The two width converters this bench used to place either side
+  // of the seam are gone from the design for the reason stated there.
+  dcmac_seg_axis_tx #(.N_SEG(N_SEG), .SEG_W(SEG_W), .DATA_W(DATA_W)) u_seg_tx (
     .clk           (net_clk),
     .rstn          (net_rstn),
     .s_axis_tdata  (tx_tdata),
@@ -188,23 +181,6 @@ module tb_dcmac_axis_pktgen_seam #(
     .s_axis_tready (tx_tready_i),
     .s_axis_tlast  (tx_tlast_i),
     .s_axis_tuser  (tx_tuser),
-    .m_axis_tdata  (dn_tdata),
-    .m_axis_tkeep  (dn_tkeep),
-    .m_axis_tvalid (dn_tvalid),
-    .m_axis_tready (dn_tready),
-    .m_axis_tlast  (dn_tlast),
-    .m_axis_tuser  (dn_tuser)
-  );
-
-  dcmac_seg_axis_tx #(.N_SEG(N_SEG), .SEG_W(SEG_W)) u_seg_tx (
-    .clk           (net_clk),
-    .rstn          (net_rstn),
-    .s_axis_tdata  (dn_tdata),
-    .s_axis_tkeep  (dn_tkeep),
-    .s_axis_tvalid (dn_tvalid),
-    .s_axis_tready (dn_tready),
-    .s_axis_tlast  (dn_tlast),
-    .s_axis_tuser  (dn_tuser),
     .tx_seg_ready  (seg_ready),
     .tx_seg_valid  (seg_valid),
     .tx_seg_dat    (seg_dat),
@@ -215,7 +191,7 @@ module tb_dcmac_axis_pktgen_seam #(
     .tx_seg_mty    (seg_mty)
   );
 
-  dcmac_seg_axis_rx #(.N_SEG(N_SEG), .SEG_W(SEG_W)) u_seg_rx (
+  dcmac_seg_axis_rx #(.N_SEG(N_SEG), .SEG_W(SEG_W), .DATA_W(DATA_W)) u_seg_rx (
     .clk           (net_clk),
     .rstn          (net_rstn),
     .rx_seg_valid  (rxl_valid),
@@ -225,30 +201,13 @@ module tb_dcmac_axis_pktgen_seam #(
     .rx_seg_eop    (rxl_eop),
     .rx_seg_err    (rxl_err),
     .rx_seg_mty    (rxl_mty),
-    .m_axis_tdata  (up_tdata),
-    .m_axis_tkeep  (up_tkeep),
-    .m_axis_tvalid (up_tvalid),
-    .m_axis_tready (up_tready),
-    .m_axis_tlast  (up_tlast),
-    .m_axis_tuser  (up_tuser),
-    .rx_align_drop (rx_align_drop),
-    .rx_align_stat ()
-  );
-
-  eth_axis_dwidth_up #(.IN_W(SEG_BITS), .OUT_W(DATA_W), .USER_W(1)) u_rx_up (
-    .clk           (net_clk),
-    .rstn          (net_rstn),
-    .s_axis_tdata  (up_tdata),
-    .s_axis_tkeep  (up_tkeep),
-    .s_axis_tvalid (up_tvalid),
-    .s_axis_tready (up_tready),
-    .s_axis_tlast  (up_tlast),
-    .s_axis_tuser  (up_tuser),
     .m_axis_tdata  (rx_tdata),
     .m_axis_tkeep  (rx_tkeep),
     .m_axis_tvalid (rx_tvalid),
     .m_axis_tready (1'b1),
     .m_axis_tlast  (rx_tlast),
-    .m_axis_tuser  (rx_tuser)
+    .m_axis_tuser  (rx_tuser),
+    .rx_align_drop (rx_align_drop),
+    .rx_align_stat ()
   );
 endmodule

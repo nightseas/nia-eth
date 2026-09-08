@@ -47,8 +47,9 @@ proc nia_dp_pol_enable_ports {} {
         error "nia_dp_pol_enable_ports: no gtwiz_versal IP in the project - the DCMAC IP recipe\
                must import its XCI(s) before this is called. The dual 100GAUI-1 and dual 200GAUI-2\
                images import TWO, one per client and one quad each, because one quad cannot reach\
-               two QSFP cages; the single 400GAUI-4 image imports ONE, which carries two quads of\
-               the same cage."
+               two QSFP cages; the dual 200GAUI-4 image imports TWO of one quad each, one cage\
+               each; the single 400GAUI-4 image imports ONE, which carries two quads of the same\
+               cage."
     }
     nia_dp_log "gtwiz IPs: $gtwiz"
     set touched {}
@@ -129,12 +130,44 @@ proc nia_dp_pol_port_names {ip} {
 
 set ::nia_pol_rtl [file normalize [file join [file dirname [info script]] .. rtl]]
 
-array set ::nia_dp_pol_rate_wiz  {100 2 200 2 400 1}
-array set ::nia_dp_pol_rate_lane {100 2 200 4 400 8}
+# The configuration key of a table below is the client rate, and 200g4 where the rate alone
+# does not name one configuration: a 200G client is either 200GAUI-2, two electrical lanes at
+# 106.25 Gb/s, or 200GAUI-4, four at 53.125 Gb/s. Both occupy one quad a cage and four GT
+# channels, so the two keys differ only in the transceiver preset. PG369 page 201 states that
+# a 3x200GE 200GAUI-4 configuration requires three GTM quads, which is one quad a port, and
+# the Vivado example design for 200GAUI-4 carries INTF0_NO_OF_LANES 4 with NO_OF_QUADS 1. The
+# key is formed by nia_dp_pol_config_key from NIA_RATE and NIA_GAUI.
+array set ::nia_dp_pol_rate_wiz  {100 2 200 2 200g4 2 400 1}
+array set ::nia_dp_pol_rate_lane {100 2 200 4 200g4 4 400 8}
 array set ::nia_dp_pol_rate_phy  {100 dcmac_phy_wrapper.sv
                                   200 rate/dcmac_phy_wrapper_200g.sv
+                                  200g4 rate/dcmac_phy_wrapper_200g.sv
                                   400 rate/dcmac_phy_wrapper_400g.sv}
-array set ::nia_dp_pol_rate_bank {100 {202 204} 200 {202 204} 400 {202 203}}
+array set ::nia_dp_pol_rate_bank {100 {202 204} 200 {202 204} 200g4 {202 204}
+                                  400 {202 203}}
+# The keys whose PHY takes its polarity defaults from dcmac_ctl_pkg::QSFP0_* and QSFP1_*,
+# which describe bank 202 and bank 204. A key that reaches bank 203 or bank 205 carries its
+# own literals from nia_dp_pol_tx and nia_dp_pol_rx instead, because the QSFP1 rows describe
+# bank 204 alone and their receive halves differ from bank 203 and bank 205.
+array set ::nia_dp_pol_rate_pkgdefault {100 1 200 1 200g4 1 400 0}
+
+array set ::nia_dp_gaui_default {100 1 200 2 400 4}
+
+proc nia_dp_pol_config_key {rate {gaui 0}} {
+    if {![info exists ::nia_dp_gaui_default($rate)]} {
+        error "nia_dp_pol_config_key: NIA_RATE=$rate is not one of 100, 200, 400"
+    }
+    if {$gaui == 0} { set gaui $::nia_dp_gaui_default($rate) }
+    if {$gaui == $::nia_dp_gaui_default($rate)} { return $rate }
+    if {$rate == 200 && $gaui == 4} { return 200g4 }
+    error "nia_dp_pol_config_key: NIA_RATE=$rate with NIA_GAUI=$gaui is not a configuration this\
+           repository carries. The electrical lane count of a rate is fixed by the port pattern of\
+           the DCMAC and the cage wiring: 100 takes 1, 400 takes 4, and 200 takes 2 or 4."
+}
+
+proc nia_dp_pol_banks_per_wiz {key} {
+    return [expr {[llength $::nia_dp_pol_rate_bank($key)] / $::nia_dp_pol_rate_wiz($key)}]
+}
 
 proc nia_dp_pol_bank_bits {bank dir} {
     upvar #0 ::nia_dp_pol_$dir row
@@ -144,40 +177,42 @@ proc nia_dp_pol_bank_bits {bank dir} {
     return $out
 }
 
-proc nia_dp_pol_conn_list {rate} {
+# Lane k of wizard w sits on quad w * banks_per_wizard + k / 4 of the configuration's bank
+# list, and on channel k % 4 of that quad. POLARITY_TX_Qn and POLARITY_RX_Qn carry the
+# absolute polarity of the n-th bank of that list, CH3 in bit 3 down to CH0 in bit 0.
+proc nia_dp_pol_quad_of_lane {key wiz lane} {
+    return [expr {$wiz * [nia_dp_pol_banks_per_wiz $key] + $lane / 4}]
+}
+
+proc nia_dp_pol_conn_list {key} {
     set out {}
-    set lanes $::nia_dp_pol_rate_lane($rate)
-    if {$::nia_dp_pol_rate_wiz($rate) > 1} {
-        foreach q {Q0 Q1} {
-            for {set k 0} {$k < $lanes} {incr k} {
-                lappend out ".INTF0_TX${k}_ch_txpolarity (POLARITY_TX_${q}\[$k\])"
-                lappend out ".INTF0_RX${k}_ch_rxpolarity (POLARITY_RX_${q}\[$k\])"
-            }
-        }
-    } else {
+    set lanes $::nia_dp_pol_rate_lane($key)
+    for {set w 0} {$w < $::nia_dp_pol_rate_wiz($key)} {incr w} {
         for {set k 0} {$k < $lanes} {incr k} {
-            set q [expr {$k < 4 ? "Q0" : "Q1"}]
+            set q [nia_dp_pol_quad_of_lane $key $w $k]
             set b [expr {$k % 4}]
-            lappend out ".INTF0_TX${k}_ch_txpolarity (POLARITY_TX_${q}\[$b\])"
-            lappend out ".INTF0_RX${k}_ch_rxpolarity (POLARITY_RX_${q}\[$b\])"
+            lappend out ".INTF0_TX${k}_ch_txpolarity (POLARITY_TX_Q${q}\[$b\])"
+            lappend out ".INTF0_RX${k}_ch_rxpolarity (POLARITY_RX_Q${q}\[$b\])"
         }
     }
     return $out
 }
 
-proc nia_dp_pol_assert {{rate 100}} {
+proc nia_dp_pol_assert {{key 100}} {
+    set rate $key
     set bad 0
-    if {![info exists ::nia_dp_pol_rate_phy($rate)]} {
-        error "nia_dp_pol_assert: NIA_RATE=$rate is not one of 100, 200, 400"
+    if {![info exists ::nia_dp_pol_rate_phy($key)]} {
+        error "nia_dp_pol_assert: '$key' is not one of the configuration keys 100, 200, 200g4, 400"
     }
-    set want_wiz  $::nia_dp_pol_rate_wiz($rate)
-    set want_lane $::nia_dp_pol_rate_lane($rate)
-    set banks     $::nia_dp_pol_rate_bank($rate)
-    set phy   [file join $::nia_pol_rtl $::nia_dp_pol_rate_phy($rate)]
+    set want_wiz  $::nia_dp_pol_rate_wiz($key)
+    set want_lane $::nia_dp_pol_rate_lane($key)
+    set banks     $::nia_dp_pol_rate_bank($key)
+    set bank_per_wiz [nia_dp_pol_banks_per_wiz $key]
+    set phy   [file join $::nia_pol_rtl $::nia_dp_pol_rate_phy($key)]
     set stub  $::nia_pol_rtl/dcmac_phy_model.sv
     set pkg   $::nia_pol_rtl/ctl/dcmac_ctl_pkg.sv
-    puts "NIA_DP_POLARITY RATE $rate phy=$::nia_dp_pol_rate_phy($rate) want_gtwiz=$want_wiz\
-          want_lanes=$want_lane banks=$banks"
+    puts "NIA_DP_POLARITY RATE $key phy=$::nia_dp_pol_rate_phy($key) want_gtwiz=$want_wiz\
+          want_lanes=$want_lane banks=$banks banks_per_gtwiz=$bank_per_wiz"
 
     set gtwiz [nia_dp_gtwiz_ips]
     puts "NIA_DP_POLARITY C1 gtwiz_count=[llength $gtwiz] (want $want_wiz at rate $rate)"
@@ -185,7 +220,8 @@ proc nia_dp_pol_assert {{rate 100}} {
         if {$want_wiz == 2} {
             puts "NIA_DP_POLARITY C1 FAIL expected two gtwiz IPs at rate $rate; polarity is per\
                   quad, so with one gtwiz the second cage does not exist to be polarised: one quad\
-                  cannot reach two QSFP cages)."
+                  cannot reach two QSFP cages). At 200GAUI-4 each of the two wizards carries the\
+                  TWO quads of its own cage, so the count is still two and the lane count is eight."
         } else {
             puts "NIA_DP_POLARITY C1 FAIL expected ONE gtwiz IP at rate $rate: a 400GAUI-4 client is\
                   eight lanes across two quads of the SAME cage and the harvested\
@@ -285,7 +321,7 @@ proc nia_dp_pol_assert {{rate 100}} {
         incr bad
     } else {
         set fh [open $phy r]; set ft [read $fh]; close $fh
-        if {$want_wiz > 1} {
+        if {$::nia_dp_pol_rate_pkgdefault($key)} {
             foreach {p src} [list POLARITY_TX_Q0 QSFP0_TXPOLARITY POLARITY_RX_Q0 QSFP0_RXPOLARITY \
                                   POLARITY_TX_Q1 QSFP1_TXPOLARITY POLARITY_RX_Q1 QSFP1_RXPOLARITY] {
                 if {[regexp "${p}\\s*=\\s*dcmac_ctl_pkg::${src}" $ft]} {
@@ -322,7 +358,7 @@ proc nia_dp_pol_assert {{rate 100}} {
         }
         set fn $ft
         regsub -all {\s+} $fn " " fn
-        foreach conn [nia_dp_pol_conn_list $rate] {
+        foreach conn [nia_dp_pol_conn_list $key] {
             if {[string first $conn $fn] >= 0} {
                 puts "NIA_DP_POLARITY C5 ok [file tail $phy] $conn"
             } else {
@@ -345,11 +381,14 @@ proc nia_dp_pol_assert {{rate 100}} {
         incr bad
     } else {
         set fh [open $stub r]; set st [read $fh]; close $fh
-        foreach p {POLARITY_TX_Q0 POLARITY_RX_Q0 POLARITY_TX_Q1 POLARITY_RX_Q1} {
+        foreach p {POLARITY_TX_Q0 POLARITY_RX_Q0 POLARITY_TX_Q1 POLARITY_RX_Q1
+                   POLARITY_TX_Q2 POLARITY_RX_Q2 POLARITY_TX_Q3 POLARITY_RX_Q3} {
             if {![regexp "parameter\\s+logic\\s*\\\[7:0\\\]\\s+$p" $st]} {
-                puts "NIA_DP_POLARITY C6 FAIL dcmac_phy_model.sv is missing parameter $p. The two\
-                      PHY implementations MUST keep identical port and parameter lists - choosing\
-                      between them is a FILE-LIST SWAP and that property is load-bearing."
+                puts "NIA_DP_POLARITY C6 FAIL dcmac_phy_model.sv is missing parameter $p. Every PHY\
+                      implementation MUST keep identical port and parameter lists - choosing\
+                      between them is a FILE-LIST SWAP and that property is load-bearing. The four\
+                      quad configuration polarises banks 202, 203, 204 and 205, so the list runs\
+                      Q0 to Q3."
                 incr bad
             }
         }
@@ -359,14 +398,14 @@ proc nia_dp_pol_assert {{rate 100}} {
     return $bad
 }
 
-proc nia_dp_preflight_polarity_or_die {{rate 100}} {
-    set bad [nia_dp_pol_assert $rate]
+proc nia_dp_preflight_polarity_or_die {{key 100}} {
+    set bad [nia_dp_pol_assert $key]
     if {$bad > 0} {
-        error "POLARITY PREFLIGHT FAILED at rate $rate with $bad problem(s), BEFORE synth_design on\
-               purpose. Every FAIL above is the kind of defect that yields an image which builds,\
-               closes timing, programs, and never aligns on one or both wires. 204.CH0 requires\
-               TX_INV=1 / RX_INV=1 (app/dcmac_pktgen/recipes/polarity_pindef.tcl:24)."
+        error "POLARITY PREFLIGHT FAILED at configuration $key with $bad problem(s), BEFORE\
+               synth_design on purpose. Every FAIL above is the kind of defect that yields an image\
+               which builds, closes timing, programs, and never aligns on one or both wires. 204.CH0\
+               requires TX_INV=1 / RX_INV=1 (app/dcmac_pktgen/recipes/polarity_pindef.tcl:24)."
     }
-    puts "NIA_DP_POLARITY PREFLIGHT=PASS rate=$rate"
+    puts "NIA_DP_POLARITY PREFLIGHT=PASS rate=$key"
     return 0
 }

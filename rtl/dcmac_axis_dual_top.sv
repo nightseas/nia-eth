@@ -15,6 +15,8 @@
 
 module dcmac_axis_dual_top #(
 
+  parameter integer N_CLIENT   = 2,
+  parameter integer N_STREAM   = 1,
   parameter integer N_SEG      = 2,
   parameter integer SEG_W      = 128,
   parameter integer DATA_W     = 512,
@@ -42,6 +44,14 @@ module dcmac_axis_dual_top #(
   parameter logic [7:0] POLARITY_RX_Q0 = dcmac_ctl_pkg::QSFP0_RXPOLARITY,
   parameter logic [7:0] POLARITY_TX_Q1 = dcmac_ctl_pkg::QSFP1_TXPOLARITY,
   parameter logic [7:0] POLARITY_RX_Q1 = dcmac_ctl_pkg::QSFP1_RXPOLARITY,
+  parameter logic [7:0] POLARITY_TX_Q2 = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_RX_Q2 = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_TX_Q3 = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_RX_Q3 = 8'b0000_0000,
+
+  // The transceiver serial pin count of the whole image. A cage occupies the serial pins of
+  // every quad that serves it, four a quad, and every configuration is one quad a cage.
+  parameter integer GT_LANES  = 8,
 
   parameter integer SEG_CYC_PER_MS = 390930,
   parameter integer CTL_CYC_PER_MS = 250000,
@@ -61,13 +71,14 @@ module dcmac_axis_dual_top #(
   input  wire                    gt_ref_clk0_n,
   input  wire                    gt_ref_clk1_p,
   input  wire                    gt_ref_clk1_n,
-  input  wire [7:0]              gt_rxp_in,
-  input  wire [7:0]              gt_rxn_in,
-  output wire [7:0]              gt_txn_out,
-  output wire [7:0]              gt_txp_out,
+  input  wire [GT_LANES-1:0]     gt_rxp_in,
+  input  wire [GT_LANES-1:0]     gt_rxn_in,
+  output wire [GT_LANES-1:0]     gt_txn_out,
+  output wire [GT_LANES-1:0]     gt_txp_out,
 
   output wire                    seg_clk,
   output wire                    usr_clk,
+  output wire                    net_clk,
   output wire                    usr_rstn,
 
   input  wire [2*DATA_W-1:0]     s_axis_tx_tdata,
@@ -82,11 +93,11 @@ module dcmac_axis_dual_top #(
   output wire [2*PTP_TS_W-1:0]   m_axis_tx_cpl_ts,
   output wire [2*TX_TAG_WP-1:0]  m_axis_tx_cpl_tag,
 
-  output wire [2*DATA_W-1:0]     m_axis_rx_tdata,
-  output wire [2*DATA_W/8-1:0]   m_axis_rx_tkeep,
-  output wire [1:0]              m_axis_rx_tvalid,
-  output wire [1:0]              m_axis_rx_tlast,
-  output wire [2*RX_USER_W-1:0]  m_axis_rx_tuser,
+  output wire [N_CLIENT*N_STREAM*DATA_W-1:0]    m_axis_rx_tdata,
+  output wire [N_CLIENT*N_STREAM*DATA_W/8-1:0]  m_axis_rx_tkeep,
+  output wire [N_CLIENT*N_STREAM-1:0]           m_axis_rx_tvalid,
+  output wire [N_CLIENT*N_STREAM-1:0]           m_axis_rx_tlast,
+  output wire [N_CLIENT*N_STREAM*RX_USER_W-1:0] m_axis_rx_tuser,
 
   input  wire [PTP_TS_W-1:0]     seg_ptp_time,
 
@@ -132,9 +143,9 @@ module dcmac_axis_dual_top #(
   output wire [15:0]             ctl_repair_pll_count
 );
 
-  localparam int N_CLIENT = 2;
 
   wire                            seg_clk_i, usr_clk_i;
+  wire                            net_clk_i;
   wire [N_CLIENT-1:0]             seg_rstn_i;
 
   wire [N_CLIENT-1:0]             rx_seg_valid, tx_seg_ready, tx_seg_valid;
@@ -178,6 +189,7 @@ module dcmac_axis_dual_top #(
 
   assign seg_clk = seg_clk_i;
   assign usr_clk = usr_clk_i;
+  assign net_clk = net_clk_i;
   assign ctl_rx_pcs_aligned = rx_pcs_aligned_grp;
   assign ctl_repair_dp_count  = port_repair_count;
   assign ctl_repair_pll_count = port_repair_tmo_count;
@@ -185,7 +197,11 @@ module dcmac_axis_dual_top #(
   genvar qd;
   generate
   for (qd = 0; qd < N_CLIENT; qd++) begin : g_done_client
-    assign gt_rx_done_raw_client[qd] = |gt_rx_reset_done_raw[8*qd +: 8];
+    // report_cdc gives CDC-11, fan-out from launch flop to destination clock, because
+    // gt_rx_reset_done_raw fed both u_sync_rx_done and this reduction, so one source flop
+    // reached the destination domain by two routes that can disagree. The reduction takes the
+    // synchronised copy, which is the same information one crossing later.
+    assign gt_rx_done_raw_client[qd] = |gt_rx_done_sync[8*qd +: 8];
   end
   endgenerate
 
@@ -358,7 +374,7 @@ module dcmac_axis_dual_top #(
   generate
   for (q = 0; q < N_CLIENT; q++) begin : g_port
     dcmac_port #(
-      .N_SEG(N_SEG), .SEG_W(SEG_W), .DATA_W(DATA_W),
+      .N_SEG(N_SEG), .SEG_W(SEG_W), .DATA_W(DATA_W), .N_STREAM(N_STREAM),
       .PTP_TS_EN(PTP_TS_EN), .PTP_TS_W(PTP_TS_W), .TX_TAG_W(TX_TAG_W),
       .RX_FIFO_AW(RX_FIFO_AW), .RX_CDC_AW(RX_CDC_AW),
       .TX_FIFO_AW(TX_FIFO_AW), .TX_CDC_AW(TX_CDC_AW), .TX_CPL_AW(TX_CPL_AW)
@@ -367,6 +383,7 @@ module dcmac_axis_dual_top #(
       .seg_clk                 (seg_clk_i),
       .seg_rstn                (seg_rstn_i[q]),
       .usr_clk                 (usr_clk_i),
+      .net_clk                 (net_clk_i),
 
       .tx_clk                  (),
       .tx_rst                  (),
@@ -386,11 +403,11 @@ module dcmac_axis_dual_top #(
       .m_axis_tx_cpl_ts        (m_axis_tx_cpl_ts[q*PTP_TS_W +: PTP_TS_W]),
       .m_axis_tx_cpl_tag       (m_axis_tx_cpl_tag[q*TX_TAG_WP +: TX_TAG_WP]),
 
-      .m_axis_rx_tdata         (m_axis_rx_tdata[q*DATA_W +: DATA_W]),
-      .m_axis_rx_tkeep         (m_axis_rx_tkeep[q*(DATA_W/8) +: DATA_W/8]),
-      .m_axis_rx_tvalid        (m_axis_rx_tvalid[q]),
-      .m_axis_rx_tlast         (m_axis_rx_tlast[q]),
-      .m_axis_rx_tuser         (m_axis_rx_tuser[q*RX_USER_W +: RX_USER_W]),
+      .m_axis_rx_tdata         (m_axis_rx_tdata[q*N_STREAM*DATA_W +: N_STREAM*DATA_W]),
+      .m_axis_rx_tkeep         (m_axis_rx_tkeep[q*N_STREAM*(DATA_W/8) +: N_STREAM*(DATA_W/8)]),
+      .m_axis_rx_tvalid        (m_axis_rx_tvalid[q*N_STREAM +: N_STREAM]),
+      .m_axis_rx_tlast         (m_axis_rx_tlast[q*N_STREAM +: N_STREAM]),
+      .m_axis_rx_tuser         (m_axis_rx_tuser[q*N_STREAM*RX_USER_W +: N_STREAM*RX_USER_W]),
 
       .seg_ptp_time            (seg_ptp_time),
 
@@ -447,7 +464,10 @@ module dcmac_axis_dual_top #(
     .LOOPBACK_MODE(LOOPBACK_MODE),
     .ANCHOR_0(ANCHOR_0), .ANCHOR_1(ANCHOR_1),
     .POLARITY_TX_Q0(POLARITY_TX_Q0), .POLARITY_RX_Q0(POLARITY_RX_Q0),
-    .POLARITY_TX_Q1(POLARITY_TX_Q1), .POLARITY_RX_Q1(POLARITY_RX_Q1)
+    .POLARITY_TX_Q1(POLARITY_TX_Q1), .POLARITY_RX_Q1(POLARITY_RX_Q1),
+    .POLARITY_TX_Q2(POLARITY_TX_Q2), .POLARITY_RX_Q2(POLARITY_RX_Q2),
+    .POLARITY_TX_Q3(POLARITY_TX_Q3), .POLARITY_RX_Q3(POLARITY_RX_Q3),
+    .GT_LANES(GT_LANES)
   ) u_phy (
     .sys_reset               (sys_reset),
     .gt_ref_clk0_p           (gt_ref_clk0_p),
@@ -463,6 +483,7 @@ module dcmac_axis_dual_top #(
     .seg_rstn                (seg_rstn_i),
     .seg_rstn_ctl            (seg_rstn_ctl_i),
     .usr_clk                 (usr_clk_i),
+    .net_clk                 (net_clk_i),
 
     .rx_seg_valid            (rx_seg_valid),
     .rx_seg_dat              (rx_seg_dat),

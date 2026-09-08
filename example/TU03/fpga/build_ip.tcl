@@ -27,11 +27,34 @@ if {[lsearch -exact {100 200 400} $rate] < 0} {
   puts "IP FAIL: NIA_RATE=$rate is not one of 100, 200, 400"
   exit 2
 }
-set rate_src [file join $ip_src rate$rate]
+set gaui_default [expr {$rate == 100 ? 1 : ($rate == 400 ? 4 : 2)}]
+set gaui         [expr {[info exists env(NIA_GAUI)] ? $env(NIA_GAUI) : $gaui_default}]
+if {$gaui != $gaui_default && !($rate == 200 && $gaui == 4)} {
+  puts "IP FAIL: NIA_RATE=$rate with NIA_GAUI=$gaui is not a configuration this repository carries.\
+The electrical lane count is fixed by the port pattern and the cage wiring: 100 takes 1, 400 takes 4,\
+and 200 takes 2 or 4."
+  exit 2
+}
+# CAUTION: 200GAUI-4 is out of scope for this release, which covers 112G PAM4 a lane only:
+# 100GAUI-1, 200GAUI-2 and 400GAUI-4 all run 106.25 Gb/s a lane. A 200GAUI-4 cage needs four
+# lanes at 53.125 and its wizards here are preset at 106.25, so the pair it generates is
+# misconfigured. The source is kept for later work and this refusal keeps it out of every build.
+if {$rate == 200 && $gaui == 4} {
+  puts "IP FAIL: NIA_RATE=200 with NIA_GAUI=4 selects 200GAUI-4, which is out of scope for this\
+release. This release covers 112G PAM4 a lane only. Leave NIA_GAUI unset to generate 200GAUI-2."
+  exit 2
+}
+set rate_key [expr {($rate == 200 && $gaui == 4) ? "200g4" : $rate}]
 if {$rate != 100} {
+  source [file join $nia_root ip dcmac_ip_rate.tcl]
+  set rate_src [file join $ip_src [nia_rate_ip_subdir $rate_key]]
   set clients [expr {$rate == 400 ? 1 : 2}]
+} else {
+  set rate_src [file join $ip_src rate$rate]
 }
 puts "IP RATE $rate"
+puts "IP GAUI $gaui"
+puts "IP CONFIG $rate_key"
 
 set required [list dcmac_0_gtwiz_versal_0.xci dcmac_0_clk_wiz_0.xci]
 if {$clients > 1} { lappend required dcmac_0_gtwiz_versal_1.xci }
@@ -43,10 +66,9 @@ if {$rate == 100} {
     }
   }
 } else {
-  source [file join $nia_root ip dcmac_ip_rate.tcl]
-  foreach x [nia_rate_ip_files $rate] {
+  foreach x [nia_rate_ip_files $rate_key] {
     if {![file exists [file join $rate_src $x]]} {
-      puts "IP FAIL: $x is absent from $rate_src. It is a generated product of the DCMAC example design at NIA_RATE=$rate and this script does not invent it."
+      puts "IP FAIL: $x is absent from $rate_src. It is a generated product for configuration $rate_key and this script does not invent it; ip/dcmac_gtwiz_200g4.tcl produces the 200GAUI-4 pair."
       exit 2
     }
   }
@@ -58,21 +80,17 @@ if {$rate == 100} {
 }
 puts "IP SRC $ip_src"
 
-set pktgen [expr {[info exists env(NIA_PKTGEN)] ? $env(NIA_PKTGEN) : "seg"}]
+set pktgen [expr {[info exists env(NIA_PKTGEN)] ? $env(NIA_PKTGEN) : "axis"}]
 
 proc nia_ip_request {} {
   set out [list]
-  foreach var {NIA_RATE NIA_CLIENTS NIA_PKTGEN NIA_PART} {
+  foreach var {NIA_RATE NIA_GAUI NIA_CLIENTS NIA_PKTGEN NIA_PART} {
     lappend out "$var=[expr {[info exists ::env($var)] ? $::env($var) : {}}]"
   }
   return [join $out " "]
 }
 if {[lsearch -exact {seg axis} $pktgen] < 0} {
   puts "IP FAIL: NIA_PKTGEN=$pktgen is not one of seg, axis"
-  exit 2
-}
-if {$pktgen eq "axis" && $rate != 100} {
-  puts "IP FAIL: NIA_PKTGEN=axis is built at NIA_RATE=100 only, and was asked for at rate $rate"
   exit 2
 }
 puts "IP PKTGEN $pktgen"
@@ -94,7 +112,7 @@ set_property ip_output_repo $ip_dir [current_project]
 puts "IP CLIENTS $clients"
 if {$rate != 100} {
   puts "IP STAGE create"
-  dcmac_create_ips_rate $rate $ip_src $rate_src
+  dcmac_create_ips_rate $rate_key $ip_src $rate_src
 } elseif {$clients > 1} {
   source [file join $nia_root ip dcmac_ip_dual.tcl]
   puts "IP STAGE create"
@@ -118,7 +136,7 @@ foreach ip [get_ips] {
 
 puts "IP STAGE polarity"
 if {$rate != 100} {
-  puts "IP POLARITY done by the rate $rate recipe"
+  puts "IP POLARITY done by the $rate_key recipe"
 } elseif {$clients == 1} {
   source [file join $nia_root ip dcmac_polarity.tcl]
   nia_dp_pol_enable_ports

@@ -61,8 +61,14 @@ if {$nia_quads_placed == 0} {
   error "NIA_XDC FAIL: no transceiver quad matched a cage, placement would be left to the tool"
 }
 set nia_refclks_placed [nia_place_by_name $nia_refclk_map refclk]
-if {$nia_refclks_placed != $nia_quads_placed} {
-  error "NIA_XDC FAIL: $nia_quads_placed quad(s) placed but $nia_refclks_placed reference clock buffer(s), so one cage has no clock"
+# One buffer a quad is the usual arrangement. A caller whose quads share a buffer within a cage
+# states the ratio it expects, so a missing buffer is still caught.
+if {![info exists nia_refclk_per_quad]} { set nia_refclk_per_quad 1 }
+set nia_refclks_want [expr {int($nia_quads_placed * $nia_refclk_per_quad)}]
+if {$nia_refclks_placed != $nia_refclks_want} {
+  error "NIA_XDC FAIL: $nia_quads_placed quad(s) placed and $nia_refclks_placed reference clock\
+         buffer(s), where $nia_refclks_want are expected at $nia_refclk_per_quad buffer(s) a quad, so\
+         one cage has no clock"
 }
 puts "NIA_XDC cages $nia_quads_placed quad(s) and $nia_refclks_placed reference clock buffer(s)"
 
@@ -73,8 +79,23 @@ foreach nia_clkgen [lsort [get_cells -quiet -hier \
   set nia_clkgen_clocks [get_clocks -quiet -of_objects \
     [get_pins -quiet -of_objects [get_cells $nia_clkgen] -filter {REF_PIN_NAME =~ CLKOUT*}]]
   if {[llength $nia_clkgen_clocks] > 0} {
-    lappend nia_clock_trees $nia_clkgen_clocks
-    puts "NIA_XDC clock tree $nia_clkgen : $nia_clkgen_clocks"
+    # The outputs of one clock generator are normally related and are grouped together. The
+    # user clock wizard is the exception: since the DCMAC APB3_CLK requires 3.333 ns, its
+    # clk_out1 carries the register plane at 250 MHz while clk_out3 carries the datapath at
+    # 250 or 390.625, and the two are crossed only through dcmac_sync2 and the dcmac_csr_snap
+    # handshake. Grouping them together times those crossings against the tighter period,
+    # which is how a 199 bit handshake bus came to fail by -1.914 ns in m400u391. Each output
+    # of this generator is therefore its own group.
+    if {[string match "*usr_clk_wiz*" $nia_clkgen]} {
+      foreach nia_one $nia_clkgen_clocks {
+        lappend nia_clock_trees [list $nia_one]
+        puts "NIA_XDC clock tree $nia_clkgen output [get_property NAME $nia_one] is its own\
+ group, because the register plane and the datapath are asynchronous by design"
+      }
+    } else {
+      lappend nia_clock_trees $nia_clkgen_clocks
+      puts "NIA_XDC clock tree $nia_clkgen : $nia_clkgen_clocks"
+    }
   }
 }
 
@@ -140,6 +161,38 @@ foreach nia_pin [get_pins -quiet -of_objects $nia_sync2_flops -filter {REF_PIN_N
 if {[dict size $nia_sync2_entry] == 0} {
   error "NIA_XDC FAIL: no dcmac_sync2 first stage input matched, so the crossing bound would name nothing"
 }
+# The dcmac_csr_snap handshake carries a wide vector across the same boundary: hold is
+# clocked by s_clk and dout_r by m_clk, and the two phase handshake holds the data stable for
+# the whole crossing, so the path is asynchronous by construction and is bounded rather than
+# timed. Without this the bus is timed as a synchronous path and fails by most of a cycle.
+set nia_snap_cells [get_cells -quiet -hier \
+  -filter {ORIG_REF_NAME == dcmac_csr_snap || REF_NAME == dcmac_csr_snap}]
+set nia_snap_entry [dict create]
+foreach nia_snap $nia_snap_cells {
+  foreach nia_pin [get_pins -quiet -of_objects \
+    [get_cells -quiet -hier -filter "PARENT =~ $nia_snap*"] -filter {REF_PIN_NAME == D}] {
+    set nia_nm [get_property NAME $nia_pin]
+    if {![regexp {(dout_r_reg|hold_reg)} $nia_nm]} { continue }
+    set nia_dc [get_clocks -quiet -of_objects \
+      [get_pins -quiet -of_objects [get_cells -quiet -of_objects $nia_pin] \
+         -filter {REF_PIN_NAME == C}]]
+    if {[llength $nia_dc] != 1} { continue }
+    dict lappend nia_snap_entry [get_property NAME [lindex $nia_dc 0]] $nia_pin
+  }
+}
+dict for {nia_dst nia_pins} $nia_snap_entry {
+  set nia_from [list]
+  foreach nia_clk [get_clocks -quiet] {
+    set nia_name [get_property NAME $nia_clk]
+    if {$nia_name ne $nia_dst} { lappend nia_from $nia_name }
+  }
+  if {[llength $nia_from] == 0} { continue }
+  set nia_period [get_property PERIOD [get_clocks $nia_dst]]
+  set_max_delay -datapath_only $nia_period -from [get_clocks $nia_from] -to $nia_pins
+  puts "NIA_XDC handshake vector entries [llength $nia_pins] into $nia_dst bounded at\
+ $nia_period ns"
+}
+
 dict for {nia_dst nia_pins} $nia_sync2_entry {
   set nia_from [list]
   foreach nia_clk [get_clocks -quiet] {

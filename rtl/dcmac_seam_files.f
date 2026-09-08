@@ -25,8 +25,10 @@ ctl/dcmac_link_ctl.sv
 dcmac_sync2.sv
 gt_rst_req_gate.sv
 dcmac_seg_axis_adapter.sv
+dcmac_seg_axis_rx.sv
 eth_axis_dwidth.sv
 dcmac_axis_frame_fifo.sv
+dcmac_axis_rx_stream.sv
 dcmac_axis_adapter.sv
 dcmac_port.sv
 

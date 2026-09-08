@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# File        : Makefile.g400
+# Description : The transmit segment packer set at the 400G geometry: 8 segments of 128 bits
+#               against one 1024 bit host stream.
+# Author      : Xiaohai Li <haixiaolee@gmail.com>
+# Language    : Makefile
+#
+#
+# Copyright (c) 2026 Xiaohai Li <haixiaolee@gmail.com>
+# SPDX-License-Identifier: BSD-2-Clause-Views
+# ---------------------------------------------------------------------------
+
+SIM_BUILD ?= sim_build_seg_pack_g400
+COCOTB_RESULTS_FILE ?= results_seg_pack_g400.xml
+
+N_SEG   := 8
+DATA_W  := 1024
+FIFO_AW := 10
+
+VERILOG_SOURCES :=
+
+include $(dir $(lastword $(MAKEFILE_LIST)))Makefile

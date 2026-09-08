@@ -484,17 +484,29 @@ module dcmac_link_ctl
       localparam int FSM_ANCHOR = (g == 0) ? ANCHOR : ANCHOR_1;
 
       wire       aligned_a = (ALIGN_EXPORT_MODE != 0) ? sup_aligned[g] : seq_link_up[g];
-      wire [3:0] fsm_in_a  = { rx_force_resync_req | rx_force_resync | host_rx_force_resync_req[g],
+      // report_cdc gives CDC-10, combinational logic detected before a synchroniser, for this
+      // entry: the two request bits were an OR of three and of two signals presented to the
+      // first asynchronous flop, so it could sample the gate settling. Each signal crosses on
+      // its own and the combination is formed after the crossing, which carries the same
+      // meaning because an OR of stable values equals the OR of their stable crossings.
+      wire [5:0] fsm_raw_a = { rx_force_resync_req,
+                               rx_force_resync,
+                               host_rx_force_resync_req[g],
                                sup_reset_req[g] | host_link_reset_req[g],
                                seq_bringup_done,
                                aligned_a };
-      wire [3:0] fsm_in_s;
+      wire [5:0] fsm_raw_s;
 
-      dcmac_sync2 #(.WIDTH(4), .STAGES(2), .INIT(4'h0)) u_fsm_in_sync (
+      dcmac_sync2 #(.WIDTH(6), .STAGES(2), .INIT(6'h00)) u_fsm_in_sync (
         .clk  (seg_clk),
-        .din  (fsm_in_a),
-        .dout (fsm_in_s)
+        .din  (fsm_raw_a),
+        .dout (fsm_raw_s)
       );
+
+      wire [3:0] fsm_in_s = { fsm_raw_s[5] | fsm_raw_s[4] | fsm_raw_s[3],
+                              fsm_raw_s[2],
+                              fsm_raw_s[1],
+                              fsm_raw_s[0] };
 
       wire remote_fault_s;
       dcmac_sync2 #(.WIDTH(1), .STAGES(2), .INIT(1'b0)) u_fsm_fault_sync (

@@ -4,6 +4,27 @@
 #               identity and bring-up through byte exactness, the rate table, the stall
 #               report and one repair command, each printing one result line, and the run
 #               stops at the first failure.
+#
+#               Step 1 names the instrument from MODULE_TYPE before it reads the geometry
+#               register, because the two instruments publish different fields at the same
+#               offset: dcmac_seg_pktgen returns {N_SEG, SEG_W} and dcmac_axis_pktgen
+#               returns {KEEP_W, DATA_W}. The AXI-Stream instrument publishes no electrical
+#               lane count, so its line rate comes from NIA_LINE_GBPS.
+#
+#               Steps 6 and 7 bound the loss of a deliberate disturbance rather than
+#               forbidding it. A repair drops the carrier of the cage it resets and the two
+#               cages are wired to each other, and a mid-frame stop truncates a frame, so in
+#               both cases the frame in flight is lost. dcmac_axis_frame_chk clears its beat
+#               counter on tlast, so the checker mismatches that one frame and re-locks at
+#               the next frame boundary, and the instrument counts mismatched beats rather
+#               than frames. The bound is therefore the beat count of one frame, which
+#               frame_beats computes, and the truncated frame's bytes land in the window
+#               that follows rather than the one that carried them. Verdicts 6f and 7c hold
+#               the bursts after the first to byte exactness with no repair command issued,
+#               and those two are what assert that the checker re-locks by itself.
+#
+#               NIA_REPAIR_LEN sets the frame length of steps 6 and 7, which is what makes
+#               the beat count bound testable at more than one length.
 # Author      : Xiaohai Li <haixiaolee@gmail.com>
 # Language    : Tcl
 #
@@ -28,8 +49,10 @@ set reset_grp    [expr {[info exists env(NIA_RESET_GROUP)]? $env(NIA_RESET_GROUP
 set repair       [expr {[info exists env(NIA_REPAIR)]     ? $env(NIA_REPAIR)     : "rxdp"}]
 set obs_ms       [expr {[info exists env(NIA_OBSERVE_MS)] ? $env(NIA_OBSERVE_MS) : 3000}]
 set post_bursts  [expr {[info exists env(NIA_POST_BURSTS)] ? $env(NIA_POST_BURSTS) : 3}]
+set repair_len   [expr {[info exists env(NIA_REPAIR_LEN)] ? $env(NIA_REPAIR_LEN) : 512}]
 
-set MODULE_TYPE_EXPECT   0x4E535047
+set MODULE_TYPE_SEG      0x4E535047
+set MODULE_TYPE_AXIS     0x4E415047
 set MAP_VERSION_EXPECT   0x00030001
 
 set SEG_W_EXPECT         128
@@ -166,6 +189,12 @@ proc link_status {} {
   return [array get s]
 }
 
+proc frame_beats {len} {
+  global ::nia_data_w
+  set per [expr {$::nia_data_w / 8}]
+  return [expr {($len + $per - 1) / $per}]
+}
+
 proc cmd_pulse {mask} {
   global CMD C_CTL
   wr [expr {$CMD + $C_CTL}] 0x0
@@ -190,14 +219,45 @@ if {[llength $dpc] == 0} {
 targets -set -filter {name =~ "DPC"}
 puts "TEST WINDOW pg0 [format 0x%08X $PG0] cmd [format 0x%08X $CMD] pg1 [format 0x%08X $PG1]"
 
-set ::nia_n_seg [expr {(([rd [expr {$PG0 + $R_SEG_GEOMETRY}]]) >> 16) & 0xFFFF}]
-if {!($::nia_n_seg == 2 || $::nia_n_seg == 4 || $::nia_n_seg == 8)} {
-  puts "TEST FAIL: SEG_GEOMETRY reports N_SEG $::nia_n_seg, which is not a rate this instrument builds"
+# The two instruments publish different geometry at the same offset. dcmac_seg_pktgen returns
+# {N_SEG, SEG_W} and dcmac_axis_pktgen returns {KEEP_W, DATA_W}, so the register is read only
+# after MODULE_TYPE has named which one answers.
+set ::nia_module_type [rd [expr {$PG0 + $R_MODULE_TYPE}]]
+set geom [rd [expr {$PG0 + $R_SEG_GEOMETRY}]]
+set geom_hi [expr {($geom >> 16) & 0xFFFF}]
+set geom_lo [expr {$geom & 0xFFFF}]
+
+if {$::nia_module_type == $MODULE_TYPE_SEG} {
+  set ::nia_kind_top segmented
+  set ::nia_n_seg  $geom_hi
+  set ::nia_data_w [expr {$geom_hi * $geom_lo}]
+  if {!($::nia_n_seg == 2 || $::nia_n_seg == 4 || $::nia_n_seg == 8)} {
+    puts "TEST FAIL: SEG_GEOMETRY reports N_SEG $::nia_n_seg, which is not a rate this instrument builds"
+    exit 2
+  }
+  set ::nia_line_gbps [expr {$::nia_n_seg * 50}]
+} elseif {$::nia_module_type == $MODULE_TYPE_AXIS} {
+  set ::nia_kind_top {AXI-Stream}
+  set ::nia_data_w $geom_lo
+  set ::nia_n_seg  0
+  if {$geom_hi != $::nia_data_w / 8} {
+    puts "TEST FAIL: AXIS_GEOMETRY reports KEEP_W $geom_hi against DATA_W $::nia_data_w"
+    exit 2
+  }
+  if {![info exists env(NIA_LINE_GBPS)]} {
+    puts "TEST FAIL: the AXI-Stream instrument publishes the stream width and not the line rate,\
+          because the electrical lane count is not in the register map. Set NIA_LINE_GBPS to the\
+          rate of the image under test; NIA_RATE in its image_props.txt carries it."
+    exit 2
+  }
+  set ::nia_line_gbps $env(NIA_LINE_GBPS)
+} else {
+  puts "TEST FAIL: MODULE_TYPE [format 0x%08X $::nia_module_type] is neither the segmented\
+        [format 0x%08X $MODULE_TYPE_SEG] nor the AXI-Stream [format 0x%08X $MODULE_TYPE_AXIS] instrument"
   exit 2
 }
-set ::nia_line_gbps       [expr {$::nia_n_seg * 50}]
 set ::nia_line_bytes_per_s [expr {$::nia_line_gbps * 1.0e9 / 8.0}]
-puts "TEST RATE N_SEG $::nia_n_seg, ${::nia_line_gbps}GAUI-[expr {$::nia_n_seg / 2}], line rate $::nia_line_gbps Gb/s"
+puts "TEST RATE instrument $::nia_kind_top, DATA_W $::nia_data_w, line rate $::nia_line_gbps Gb/s. The electrical lane count is not in the register map, so the GAUI variant is not named here."
 puts "TEST STEPS $steps"
 
 set t0 [now_us]
@@ -215,21 +275,47 @@ if {[lsearch $steps 1] >= 0} {
     set sg [rd [expr {$pg + $R_SEG_GEOMETRY}]]
     set ft [rd [expr {$pg + $R_FEATURES}]]
     puts "STEP 1 $name MODULE_TYPE [format 0x%08X $mt] MAP_VERSION [format 0x%08X $mv] SEG_GEOMETRY [format 0x%08X $sg] FEATURES [format 0x%08X $ft]"
-    if {$mt != $MODULE_TYPE_EXPECT} { set ok 0 ; set why "$name MODULE_TYPE [format 0x%08X $mt] not [format 0x%08X $MODULE_TYPE_EXPECT]" }
+    if {$mt == $MODULE_TYPE_SEG} {
+      set kind segmented
+    } elseif {$mt == $MODULE_TYPE_AXIS} {
+      set kind AXI-Stream
+    } else {
+      set kind unknown
+      set ok 0
+      set why "$name MODULE_TYPE [format 0x%08X $mt] is neither the segmented [format 0x%08X $MODULE_TYPE_SEG] nor the AXI-Stream [format 0x%08X $MODULE_TYPE_AXIS] instrument"
+    }
+    puts "STEP 1 $name INSTRUMENT $kind"
+    if {$name eq "client0"} {
+      set ::nia_kind $kind
+    } elseif {$kind ne $::nia_kind} {
+      set ok 0 ; set why "the two windows report different instruments, $::nia_kind and $kind"
+    }
     if {$mv != $MAP_VERSION_EXPECT} { set ok 0 ; set why "$name MAP_VERSION [format 0x%08X $mv] not [format 0x%08X $MAP_VERSION_EXPECT]" }
-    set n_seg [expr {($sg >> 16) & 0xFFFF}]
-    set seg_w [expr {$sg & 0xFFFF}]
-    if {$seg_w != $SEG_W_EXPECT} { set ok 0 ; set why "$name SEG_W $seg_w not $SEG_W_EXPECT" }
-    if {!($n_seg == 2 || $n_seg == 4 || $n_seg == 8)} {
-      set ok 0 ; set why "$name N_SEG $n_seg is not 2, 4 or 8, so it is not a rate this instrument builds"
+    if {$kind eq "segmented"} {
+      set n_seg [expr {($sg >> 16) & 0xFFFF}]
+      set seg_w [expr {$sg & 0xFFFF}]
+      if {$seg_w != $SEG_W_EXPECT} { set ok 0 ; set why "$name SEG_W $seg_w not $SEG_W_EXPECT" }
+      if {!($n_seg == 2 || $n_seg == 4 || $n_seg == 8)} {
+        set ok 0 ; set why "$name N_SEG $n_seg is not 2, 4 or 8, so it is not a rate this instrument builds"
+      }
+    } else {
+      set n_seg 0
+      set data_w [expr {$sg & 0xFFFF}]
+      set keep_w [expr {($sg >> 16) & 0xFFFF}]
+      if {$keep_w != $data_w / 8} { set ok 0 ; set why "$name KEEP_W $keep_w against DATA_W $data_w" }
+      if {$data_w != $::nia_data_w} { set ok 0 ; set why "$name DATA_W $data_w against $::nia_data_w on the first window" }
     }
     if {$NIA_SEG_EXPECT != 0 && $n_seg != $NIA_SEG_EXPECT} {
       set ok 0 ; set why "$name N_SEG $n_seg but NIA_SEG asked for $NIA_SEG_EXPECT"
     }
-    if {$name eq "client0"} { set ::nia_n_seg $n_seg } elseif {$n_seg != $::nia_n_seg} {
+    if {$kind eq "segmented" && $n_seg != $::nia_n_seg} {
       set ok 0 ; set why "the two clients report different geometries, $::nia_n_seg and $n_seg"
     }
-    puts "STEP 1 $name N_SEG $n_seg SEG_W $seg_w, which is [expr {$n_seg * 50}]GAUI-[expr {$n_seg / 2}]"
+    if {$kind eq "segmented"} {
+      puts "STEP 1 $name N_SEG $n_seg SEG_W $seg_w, line rate [expr {$n_seg * 50}] Gb/s"
+    } else {
+      puts "STEP 1 $name DATA_W $data_w KEEP_W $keep_w, line rate $::nia_line_gbps Gb/s from NIA_LINE_GBPS"
+    }
 
     wr [expr {$pg + $R_BUS_CHECK}] 0xA5A51234
     set b1 [rd [expr {$pg + $R_BUS_CHECK}]]
@@ -251,10 +337,10 @@ if {[lsearch $steps 1] >= 0} {
 
   wr [expr {$PG0 + $R_BUS_CHECK}] 0x11112222
   wr [expr {$PG1 + $R_BUS_CHECK}] 0x33334444
-  set a0 [rd [expr {$PG0 + $R_BUS_CHECK}]]
-  set a1 [rd [expr {$PG1 + $R_BUS_CHECK}]]
-  puts "STEP 1 alias check client0 [format 0x%08X $a0] client1 [format 0x%08X $a1]"
-  if {$a0 != 0x11112222 || $a1 != 0x33334444} { set ok 0 ; set why "the two windows alias: [format 0x%08X $a0] [format 0x%08X $a1]" }
+  set alias0 [rd [expr {$PG0 + $R_BUS_CHECK}]]
+  set alias1 [rd [expr {$PG1 + $R_BUS_CHECK}]]
+  puts "STEP 1 alias check client0 [format 0x%08X $alias0] client1 [format 0x%08X $alias1]"
+  if {$alias0 != 0x11112222 || $alias1 != 0x33334444} { set ok 0 ; set why "the two windows alias: [format 0x%08X $alias0] [format 0x%08X $alias1]" }
   want 1 $ok $why
   step_result 1 1 $why
 }
@@ -298,10 +384,10 @@ proc burst {len} {
   pg_enable $PG1
   set done 0
   while {1} {
-    set s0 [rd [expr {$PG0 + $R_STATUS}]]
-    set s1 [rd [expr {$PG1 + $R_STATUS}]]
+    set st0 [rd [expr {$PG0 + $R_STATUS}]]
+    set st1 [rd [expr {$PG1 + $R_STATUS}]]
     set el_ms [expr {([now_us] - $t0) / 1000}]
-    if {($s0 & $ST_DONE) && ($s1 & $ST_DONE)} { set done 1 ; break }
+    if {($st0 & $ST_DONE) && ($st1 & $ST_DONE)} { set done 1 ; break }
     if {$el_ms > $burst_tmo} { break }
     after 10
   }
@@ -418,7 +504,7 @@ if {[lsearch $steps 5] >= 0} {
 
 if {[lsearch $steps 6] >= 0} {
   set ok 1
-  set why "the other group kept counting across the repair"
+  set why "the other group lost at most the one frame in flight across the repair"
   if {$reset_grp == 0} {
     set victim $PG0 ; set other $PG1 ; set vname client0 ; set oname client1
     array set mask_of [list rxdp $CC_RXDPRST_0 resync $CC_RESYNC_0 txdp $CC_TXDPRST_0]
@@ -433,8 +519,8 @@ if {[lsearch $steps 6] >= 0} {
   set mask $mask_of($repair)
   puts "STEP 6 repair $repair to group $reset_grp only, command bit mask [format 0x%02X $mask]"
 
-  pg_setup $victim 512 0 0
-  pg_setup $other  512 0 0
+  pg_setup $victim $repair_len 0 0
+  pg_setup $other  $repair_len 0 0
   pg_enable $victim
   pg_enable $other
   after 200
@@ -486,13 +572,15 @@ if {[lsearch $steps 6] >= 0} {
   puts "STEP 6 after $vname rx $v_after(rxf) frames $v_after(rxb) bytes mismatch $v_after(mis) err $v_after(err)"
 
   set v6a [expr {$mono ? 1 : 0}]
-  set v6b [expr {($o_after(mis) == $o_before(mis) && $o_after(err) == $o_before(err)) ? 1 : 0}]
+  set bound6 [frame_beats $repair_len]
+  set v6b [expr {(($o_after(mis) - $o_before(mis)) <= $bound6 &&
+                  ($o_after(err) - $o_before(err)) <= 1) ? 1 : 0}]
   set v6c [expr {($l_after(up) == 3) ? 1 : 0}]
   puts "STEP 6 VERDICT 6a other group monotone across the repair: [expr {$v6a ? {PASS} : {FAIL}}]"
-  puts "STEP 6 VERDICT 6b other group counted no error across the repair: [expr {$v6b ? {PASS} : {FAIL}}] mismatch $o_before(mis) to $o_after(mis), err $o_before(err) to $o_after(err)"
+  puts "STEP 6 VERDICT 6b the other group's loss across the repair is bounded to one frame, $bound6 beat(s) and 1 error frame: [expr {$v6b ? {PASS} : {FAIL}}] mismatch $o_before(mis) to $o_after(mis), err $o_before(err) to $o_after(err)"
   puts "STEP 6 VERDICT 6c the reset group's carrier is up again inside $bringup_tmo ms: [expr {$v6c ? {PASS} : {FAIL}}] at $rec_ms ms"
   if {!$v6a} { set ok 0 ; set why "$oname counters were not monotone across the repair" }
-  if {!$v6b} { set ok 0 ; set why "$oname counted an error across the repair: mismatch $o_before(mis) to $o_after(mis), err $o_before(err) to $o_after(err)" }
+  if {!$v6b} { set ok 0 ; set why "$oname lost more than the one frame in flight across the repair: mismatch $o_before(mis) to $o_after(mis) against a bound of $bound6 beat(s), err $o_before(err) to $o_after(err)" }
   if {!$v6c} { set ok 0 ; set why "link_up is $l_after(up) after the repair" }
 
   pg_disable $victim
@@ -502,13 +590,26 @@ if {[lsearch $steps 6] >= 0} {
   set clean_a -1
   set clean_seq {}
   for {set k 1} {$k <= $post_bursts} {incr k} {
-    array set ba [burst 512]
+    array set ba [burst $repair_len]
     array set a0 [pg_counters $PG0]
     array set a1 [pg_counters $PG1]
     set ck [expr {($a0(txf) == $a1(rxf) && $a1(txf) == $a0(rxf) && $a0(txb) == $a1(rxb) &&
                    $a1(txb) == $a0(rxb) && $a0(mis) == 0 && $a1(mis) == 0 &&
                    $a0(err) == 0 && $a1(err) == 0) ? 1 : 0}]
-    if {$k == 1} { set clean_a $ck }
+    if {$k == 1} {
+      set clean_a $ck
+      set b1_mis0 $a0(mis)
+      set b1_mis1 $a1(mis)
+      set b1_err0 $a0(err)
+      set b1_err1 $a1(err)
+      set b1_rx0 $a0(rxf)
+      set b1_rx1 $a1(rxf)
+      set b1_tx0 $a0(txf)
+      set b1_tx1 $a1(txf)
+      set bounded_a [expr {($b1_mis0 <= $bound6 && $b1_mis1 <= $bound6 &&
+                            $b1_err0 <= 1 && $b1_err1 <= 1 &&
+                            $b1_tx0 == $b1_rx1 && $b1_tx1 == $b1_rx0) ? 1 : 0}]
+    }
     lappend clean_seq [expr {$ck ? {EXACT} : {DIRTY}}]
     puts "STEP 6 burst $k after the repair, no restart: done $ba(done) client0 tx $a0(txf)/$a0(txb) rx $a0(rxf)/$a0(rxb) client1 tx $a1(txf)/$a1(txb) rx $a1(rxf)/$a1(rxb) mismatch $a0(mis) $a1(mis) err $a0(err) $a1(err) byte_exact $ck"
   }
@@ -525,18 +626,19 @@ if {[lsearch $steps 6] >= 0} {
   }
   puts "STEP 6 bring-up restart: both carriers up at $back ms"
   after 200
-  array set b [burst 512]
+  array set b [burst $repair_len]
   array set c0 [pg_counters $PG0]
   array set c1 [pg_counters $PG1]
   puts "STEP 6 burst after the restart: done $b(done) client0 tx $c0(txf)/$c0(txb) rx $c0(rxf)/$c0(rxb) client1 tx $c1(txf)/$c1(txb) rx $c1(rxf)/$c1(rxb) mismatch $c0(mis) $c1(mis) err $c0(err) $c1(err)"
   set clean_b [expr {($c0(txf) == $c1(rxf) && $c1(txf) == $c0(rxf) && $c0(txb) == $c1(rxb) &&
                       $c1(txb) == $c0(rxb) && $c0(mis) == 0 && $c1(mis) == 0 &&
                       $c0(err) == 0 && $c1(err) == 0) ? 1 : 0}]
-  puts "STEP 6 VERDICT 6d the first burst after the repair is byte exact: [expr {$clean_a ? {PASS} : {FAIL}}]"
   set later_clean [expr {[lsearch [lrange $clean_seq 1 end] DIRTY] < 0}]
+  puts "STEP 6 VERDICT 6d the first burst after the repair loses at most one frame, $bound6 beat(s): [expr {$bounded_a ? {PASS} : {FAIL}}], byte exact $clean_a, burst 1 mismatch $b1_mis0 $b1_mis1 err $b1_err0 $b1_err1 tx $b1_tx0 $b1_tx1 rx $b1_rx0 $b1_rx1"
   puts "STEP 6 VERDICT 6f every later burst after the repair is byte exact with no restart: [expr {$later_clean ? {PASS} : {FAIL}}], the sequence was $clean_seq"
   puts "STEP 6 VERDICT 6e a burst after one bring-up restart is byte exact: [expr {$clean_b ? {PASS} : {FAIL}}]"
-  if {!$clean_a} { set ok 0 ; set why "a burst straight after the repair was not byte exact, and one after a bring-up restart was [expr {$clean_b ? {clean} : {not clean either}}]" }
+  if {!$bounded_a} { set ok 0 ; set why "the first burst after the repair lost more than the one truncated frame: mismatch $b1_mis0 $b1_mis1 against a bound of $bound6 beat(s), err $b1_err0 $b1_err1, tx $b1_tx0 $b1_tx1 against rx $b1_rx1 $b1_rx0" }
+  if {!$later_clean} { set ok 0 ; set why "the checker did not re-lock without a repair command: $clean_seq" }
   if {!$clean_b} { set ok 0 ; set why "a burst after a bring-up restart was not byte exact" }
   want 6 $ok $why
   step_result 6 1 "$why, carrier back at $rec_ms ms"
@@ -544,9 +646,9 @@ if {[lsearch $steps 6] >= 0} {
 
 if {[lsearch $steps 7] >= 0} {
   set ok 1
-  set why "a mid-frame stop is not what dirties the data path"
+  set why "a mid-frame stop costs the one truncated frame and the checker re-locks itself"
 
-  array set r0 [burst 512]
+  array set r0 [burst $repair_len]
   array set p0 [pg_counters $PG0]
   array set p1 [pg_counters $PG1]
   set clean0 [expr {($p0(txf) == $p1(rxf) && $p1(txf) == $p0(rxf) && $p0(txb) == $p1(rxb) &&
@@ -555,8 +657,8 @@ if {[lsearch $steps 7] >= 0} {
   want 7 $clean0 "the baseline burst was not byte exact, so nothing after it can be attributed"
 
   puts "STEP 7 200 ms of unlimited traffic, then CTL_ENABLE cleared while a frame is in flight"
-  pg_setup $PG0 512 0 0
-  pg_setup $PG1 512 0 0
+  pg_setup $PG0 $repair_len 0 0
+  pg_setup $PG1 $repair_len 0 0
   pg_enable $PG0
   pg_enable $PG1
   after 200
@@ -570,12 +672,26 @@ if {[lsearch $steps 7] >= 0} {
   array set l [link_status]
   puts "STEP 7 link after the mid-frame stop link_up $l(up) aligned $l(aligned) seq_state $l(state) retry $l(retry)"
 
-  array set r1 [burst 512]
+  array set r1 [burst $repair_len]
   array set u0 [pg_counters $PG0]
   array set u1 [pg_counters $PG1]
   set clean1 [expr {($u0(txf) == $u1(rxf) && $u1(txf) == $u0(rxf) && $u0(txb) == $u1(rxb) &&
                      $u1(txb) == $u0(rxb) && $u0(mis) == 0 && $u1(mis) == 0) ? 1 : 0}]
   puts "STEP 7 burst after the mid-frame stop byte exact $clean1 client0 tx $u0(txf)/$u0(txb) rx $u0(rxf)/$u0(rxb) client1 tx $u1(txf)/$u1(txb) rx $u1(rxf)/$u1(rxb) mismatch $u0(mis) $u1(mis) err $u0(err) $u1(err)"
+
+  set bound [frame_beats $repair_len]
+  set bounded [expr {($u0(mis) <= $bound && $u1(mis) <= $bound &&
+                      $u0(err) == 0 && $u1(err) == 0 &&
+                      $u0(txf) == $u1(rxf) && $u1(txf) == $u0(rxf)) ? 1 : 0}]
+  puts "STEP 7 damage of the mid-frame stop bounded to one frame of $bound beat(s): [expr {$bounded ? {PASS} : {FAIL}}] mismatch $u0(mis) $u1(mis) err $u0(err) $u1(err), frame counts equal both ways"
+
+  array set r1b [burst $repair_len]
+  array set h0 [pg_counters $PG0]
+  array set h1 [pg_counters $PG1]
+  set heal [expr {($h0(txf) == $h1(rxf) && $h1(txf) == $h0(rxf) && $h0(txb) == $h1(rxb) &&
+                   $h1(txb) == $h0(rxb) && $h0(mis) == 0 && $h1(mis) == 0 &&
+                   $h0(err) == 0 && $h1(err) == 0) ? 1 : 0}]
+  puts "STEP 7 second burst after the mid-frame stop, no repair command issued, byte exact $heal client0 tx $h0(txf)/$h0(txb) rx $h0(rxf)/$h0(rxb) client1 tx $h1(txf)/$h1(txb) rx $h1(rxf)/$h1(rxb) mismatch $h0(mis) $h1(mis) err $h0(err) $h1(err)"
 
   set t_r [now_us]
   cmd_pulse $CC_RESTART
@@ -587,16 +703,18 @@ if {[lsearch $steps 7] >= 0} {
     if {$el_ms > $bringup_tmo} { break }
   }
   after 200
-  array set r2 [burst 512]
+  array set r2 [burst $repair_len]
   array set w0 [pg_counters $PG0]
   array set w1 [pg_counters $PG1]
   set clean2 [expr {($w0(txf) == $w1(rxf) && $w1(txf) == $w0(rxf) && $w0(txb) == $w1(rxb) &&
                      $w1(txb) == $w0(rxb) && $w0(mis) == 0 && $w1(mis) == 0) ? 1 : 0}]
   puts "STEP 7 burst after one bring-up restart at $back ms byte exact $clean2 client0 tx $w0(txf)/$w0(txb) rx $w0(rxf)/$w0(rxb) client1 tx $w1(txf)/$w1(txb) rx $w1(rxf)/$w1(rxb) mismatch $w0(mis) $w1(mis) err $w0(err) $w1(err)"
-  puts "STEP 7 VERDICT 7a a burst after a mid-frame stop, with no repair command issued, is byte exact: [expr {$clean1 ? {PASS} : {FAIL}}]"
+  puts "STEP 7 VERDICT 7a the damage of a mid-frame stop is bounded to one frame, $bound beat(s): [expr {$bounded ? {PASS} : {FAIL}}]"
   puts "STEP 7 VERDICT 7b a burst after one bring-up restart is byte exact: [expr {$clean2 ? {PASS} : {FAIL}}]"
-  if {!$clean1} { set ok 0 ; set why "a mid-frame stop alone dirties the data path: the next burst was not byte exact, and a bring-up restart [expr {$clean2 ? {repaired it} : {did not repair it}}]" }
+  puts "STEP 7 VERDICT 7c the second burst after a mid-frame stop is byte exact with no repair command: [expr {$heal ? {PASS} : {FAIL}}]"
+  if {!$bounded} { set ok 0 ; set why "a mid-frame stop cost more than the one truncated frame: mismatch $u0(mis) $u1(mis) against a bound of $bound beat(s), err $u0(err) $u1(err)" }
   if {!$clean2} { set ok 0 ; set why "a burst after a bring-up restart was not byte exact" }
+  if {!$heal} { set ok 0 ; set why "the checker did not re-lock without a repair command: the second burst after the mid-frame stop was not byte exact" }
   step_result 7 $ok $why
 }
 

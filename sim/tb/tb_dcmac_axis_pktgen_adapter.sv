@@ -13,6 +13,9 @@
 `timescale 1ns/1ps
 
 module tb_dcmac_axis_pktgen_adapter #(
+  // The register plane and the traffic plane are one clock at 250 MHz and two when the
+  // datapath runs at 390.625 MHz, so both arrangements are simulated.
+  parameter int SAME_CLOCK = 1,
   parameter integer DATA_W      = 512,
   parameter integer AXIL_ADDR_W = 12,
   parameter integer LEN_MIN_HW  = 64,
@@ -115,7 +118,7 @@ module tb_dcmac_axis_pktgen_adapter #(
     .TX_USER_W   (1),
     .RX_USER_W   (1),
     .AXIL_ADDR_W (AXIL_ADDR_W),
-    .SAME_CLOCK  (1'b1),
+    .SAME_CLOCK  (SAME_CLOCK[0]),
     .LEN_MIN_HW  (LEN_MIN_HW),
     .LEN_MAX_HW  (LEN_MAX_HW)
   ) u_pktgen (

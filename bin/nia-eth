@@ -57,6 +57,18 @@ Image:
                      build_image.tcl. The log proves the choice: IP RATE and
                      IMAGE RATE, plus IMAGE PHY naming the one file that
                      defines module dcmac_phy
+  NIA_GAUI           the electrical lane count of one client. It defaults to the
+                     count each rate has always built with: 1 at 100, 2 at 200
+                     and 4 at 400, so every configuration this release builds
+                     runs 112G PAM4, 106.25 Gb/s a lane. NIA_RATE=200 with
+                     NIA_GAUI=4 names the dual 200GAUI-4 configuration, four
+                     lanes of 53.125 Gb/s on the two quads of each cage, and it
+                     is REFUSED: 200GAUI-4 is out of scope for this release and
+                     the wizards carried here are preset at the wrong lane rate.
+                     See plan Section 11.32.9. The log proves the choice:
+                     IP GAUI, IP CONFIG and IMAGE GAUI, plus NIA_RATE_GTWIZ
+                     naming the lane count, the quad count and the lane rate
+                     preset each wizard was configured with
   NIA_XDC            the timing constraints, default the TU03 set under
                      example/TU03/fpga/constraints
   NIA_XDC_PHYS       the post synthesis placement and waivers, default the TU03
@@ -300,21 +312,53 @@ cmd_sim() {
 			return 1
 		fi
 	fi
+	# Each set is independent and each carries its own SIM_BUILD, so the builds run together.
+	# NIA_SIM_JOBS caps the concurrency: a verilator build of one set takes about a gigabyte, so
+	# the default is 8 rather than the core count. The verdicts are evaluated afterwards in
+	# sorted order, so the accounting and the output order do not depend on the scheduling.
+	local sim_jobs="${NIA_SIM_JOBS:-8}"
+	local ncpu; ncpu="$(nproc 2>/dev/null || echo 4)"
+	[ "$sim_jobs" -gt "$ncpu" ] && sim_jobs="$ncpu"
+	[ "$sim_jobs" -lt 1 ] && sim_jobs=1
+	local work; work="$(mktemp -d)"
+	local running=0
+	echo "nia-eth: running the simulation sets, $sim_jobs at a time"
 	while IFS= read -r mk; do
 		grep -qE '^[ \t]*(VERILOG_SOURCES|VHDL_SOURCES)[ \t]*(\+?=|:=)' "$mk" || continue
-		d="$(dirname "$mk")"
 		name="$(printf '%s' "${mk#./}")"
 		[ -n "${NIA_SIM_MATCH:-}" ] && case "$name" in *"$NIA_SIM_MATCH"*) ;; *) continue ;; esac
-		echo "== $name"
+		printf '%s\n' "$mk" >> "$work/list"
+		d="$(dirname "$mk")"
 		tag="$(printf '%s' "$name" | tr '/.' '__')"
 		rm -f "$d/results_$tag.xml"
-		if ( cd "$d" && make -f "$(basename "$mk")" \
-		       SIM_BUILD="sim_build_$tag" COCOTB_RESULTS_FILE="results_$tag.xml" \
-		       ${NIA_SIM_ARGS:-} ); then
-			mrc=0
-		else
-			mrc=1
+		(
+			cd "$d" && make -f "$(basename "$mk")" \
+			  SIM_BUILD="sim_build_$tag" COCOTB_RESULTS_FILE="results_$tag.xml" \
+			  ${NIA_SIM_ARGS:-} > "$work/$tag.out" 2>&1
+			printf '%s\n' "$?" > "$work/$tag.rc"
+		) &
+		running=$((running + 1))
+		if [ "$running" -ge "$sim_jobs" ]; then
+			wait -n 2>/dev/null || wait
+			running=$((running - 1))
 		fi
+	done < <(find . -path ./.git -prune -o -path ./lib/cocotb-stub -prune -o \
+	         -name 'mut_work' -prune -o -name 'sim_build*' -prune -o -name 'obj_dir' -prune -o \( -name 'Makefile' -o -name 'Makefile.*' \) -print \
+	         | grep -v '^\./Makefile$' | grep -vE "$NIA_MOUNT_FILTER" | sort)
+	wait
+	if [ ! -s "$work/list" ]; then
+		rm -rf "$work"
+		echo "nia-eth: no simulation set was run, so nothing was verified"
+		return 1
+	fi
+	while IFS= read -r mk; do
+		d="$(dirname "$mk")"
+		name="$(printf '%s' "${mk#./}")"
+		tag="$(printf '%s' "$name" | tr '/.' '__')"
+		echo "== $name"
+		[ -f "$work/$tag.out" ] && cat "$work/$tag.out"
+		mrc="$(cat "$work/$tag.rc" 2>/dev/null || echo 1)"
+		[ "$mrc" = 0 ] || mrc=1
 		xml=""
 		[ -f "$d/results_$tag.xml" ] && xml="$d/results_$tag.xml"
 		nf=0
@@ -351,9 +395,8 @@ cmd_sim() {
 				echo "^^ $name FAILED: $nf failing test(s), make status $mrc"
 			fi
 		fi
-	done < <(find . -path ./.git -prune -o -path ./lib/cocotb-stub -prune -o \
-	         -name 'mut_work' -prune -o -name 'sim_build*' -prune -o -name 'obj_dir' -prune -o \( -name 'Makefile' -o -name 'Makefile.*' \) -print \
-	         | grep -v '^\./Makefile$' | grep -vE "$NIA_MOUNT_FILTER" | sort)
+	done < "$work/list"
+	rm -rf "$work"
 	if [ "$pass" -eq 0 ] && [ "$bad" -eq 0 ]; then
 		echo "nia-eth: no simulation set was run, so nothing was verified"
 		return 1
@@ -441,7 +484,7 @@ cmd_image() {
 	local ip_manifest="$ip_dir/ip_manifest.txt"
 	local bd_manifest="$ip_dir/bd/bd_manifest.txt"
 	local ip_config="$ip_dir/ip_config.txt"
-	local ip_request="NIA_RATE=${NIA_RATE:-} NIA_CLIENTS=${NIA_CLIENTS:-} NIA_PKTGEN=${NIA_PKTGEN:-} NIA_PART=${NIA_PART:-}"
+	local ip_request="NIA_RATE=${NIA_RATE:-} NIA_GAUI=${NIA_GAUI:-} NIA_CLIENTS=${NIA_CLIENTS:-} NIA_PKTGEN=${NIA_PKTGEN:-} NIA_PART=${NIA_PART:-} NIA_USR_MHZ=${NIA_USR_MHZ:-} NIA_FIFO_MEM=${NIA_FIFO_MEM:-} NIA_ADAPTER=${NIA_ADAPTER:-}"
 	local ip_log="$ip_dir/ip_build.log" iprc=0
 	local ip_config_changed=0
 	[ "$(cat "$ip_config" 2>/dev/null)" != "$ip_request" ] && ip_config_changed=1
@@ -487,6 +530,8 @@ cmd_image() {
 	whs="$(sed -n 's/^IMAGE WHS //p' "$log" | head -1)"
 	nfail="$(sed -n 's/^IMAGE FAILING_PATHS //p' "$log" | head -1)"
 	noclk="$(sed -n 's/^IMAGE NOCLK //p' "$log" | head -1)"
+	wpws="$(sed -n 's/^IMAGE WPWS //p' "$log" | head -1)"
+	npw="$(sed -n 's/^IMAGE FAILING_PULSE_WIDTH //p' "$log" | head -1)"
 	mode="$(sed -n 's/^IMAGE MODE //p' "$log" | head -1)"
 	top="$(sed -n 's/^IMAGE TOP //p' "$log" | head -1)"
 	dcp="$(sed -n 's/^IMAGE CHECKPOINT //p' "$log" | head -1)"
@@ -504,6 +549,16 @@ cmd_image() {
 	fi
 	nonneg "setup slack (WNS)" "$wns"
 	nonneg "hold slack (WHS)" "$whs"
+	if [ -n "$wpws" ] && [ "$wpws" != "unknown" ]; then
+		nonneg "pulse width slack (WPWS)" "$wpws"
+	fi
+	if [ -n "$npw" ]; then
+		if [ "$npw" = 0 ]; then
+			note "failing pulse width endpoints" "$npw"
+		else
+			bad "failing pulse width endpoints" "$npw - a hard block is clocked outside its specification; the DCMAC APB3_CLK requires 3.333 ns"
+		fi
+	fi
 	[ "${nfail:-x}" = 0 ] && note "failing timing paths" "0" \
 		|| bad "failing timing paths" "${nfail:-not reported}"
 	[ "${noclk:-x}" = 0 ] && note "unconstrained clocks" "0" \

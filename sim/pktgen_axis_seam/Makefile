@@ -26,6 +26,7 @@ VERILOG_SOURCES := $(RTL_DIR)/dcmac_sync2.sv \
                    $(RTL_DIR)/pktgen_axis/dcmac_axis_frame_chk.sv \
                    $(RTL_DIR)/pktgen_axis/dcmac_axis_pktgen.sv \
                    $(RTL_DIR)/eth_axis_dwidth.sv \
+                   $(RTL_DIR)/dcmac_seg_axis_rx.sv \
                    $(RTL_DIR)/dcmac_seg_axis_adapter.sv \
                    $(HERE)/../model/seg_pack_loop.sv \
                    $(TB_DIR)/tb_dcmac_axis_pktgen_seam.sv

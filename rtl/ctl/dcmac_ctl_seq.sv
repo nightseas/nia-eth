@@ -3,6 +3,21 @@
 // Description : The bring-up sequencer: issues the configuration writes of every port and
 //               channel in order, waits where the hard block requires a wait, and halts
 //               where a host must take over.
+//
+//               Block B17 writes the statistics tick before any counter is read. PG369
+//               page 101: a tick event for the TX statistics is triggered by asserting a
+//               rising edge on the per-port tx_port_pm_tick[5:0] input pin, or by writing
+//               a 1 to the tick register of a given port through the AXI4-Lite interface.
+//               Those pins are tied to 6'b0 at every wrapper in this repository, so the
+//               register write is the only live route, and without it the DCMAC latches no
+//               snapshot and every counter behind it reads zero.
+//
+//               B17 needs no settling record before the read burst. It issues 2*NP*NG
+//               writes and the burst walks group 0 before group 1, so the port ticked
+//               first is followed by the remaining tick writes and the port ticked last by
+//               a whole group of reads. Every port therefore sees at least eleven AXI-Lite
+//               transactions before its own FEC counter is read, which covers the transfer
+//               PG369 describes as taking a number of clock cycles.
 // Author      : Xiaohai Li <haixiaolee@gmail.com>
 // Language    : SystemVerilog
 //
@@ -261,6 +276,14 @@ module dcmac_ctl_seq
         p   = anch(g) + rem / 2;
         op = OP_WR; d = 32'h0;
         a  = (rem % 2 == 0) ? pp(p, O_CHCTL_TX) : pp(p, O_CHCTL_RX);
+      end
+
+      else if (pc >= P_B17 && pc < P_B17 + 2*NP*NG) begin
+        g   = (pc - P_B17) / (2*NP);
+        rem = (pc - P_B17) % (2*NP);
+        p   = anch(g) + rem / 2;
+        op = OP_WR; d = 32'h1;
+        a  = (rem % 2 == 0) ? pp(p, O_TICK_RX) : pp(p, O_TICK_TX);
       end
 
       else if (EN_STATS && pc >= P_STATS && pc < P_STATS + N_STAT) begin

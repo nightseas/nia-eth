@@ -27,6 +27,13 @@ fi
 
 RUN="$OUT/${LABEL}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$RUN"
+
+# pktgen_twoboard_lib.tcl exits 2 on a 1024 bit AXI-Stream image unless NIA_LINE_GBPS is set,
+# because the geometry register publishes the stream width and 1024 bits is both 200G and 400G.
+# The manifest beside the image carries the rate, so take it from there.
+. "$HERE/nia_props.sh"
+nia_props_apply "$PDI" || true
+if [ -n "${NIA_LINE_GBPS:-}" ]; then export NIA_LINE_GBPS; fi
 LOG="$RUN/cycle.log"
 CSV="$RUN/cycles.csv"
 

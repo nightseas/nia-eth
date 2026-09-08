@@ -104,6 +104,23 @@ def main():
         top, files, defines, generics = sources_of(mk)
         if not top or not files:
             continue
+        # A set that declares xsim needs the Vivado simulation libraries, because the
+        # xpm_fifo and xpm_memory primitives of a vendor file elaborate there and under no
+        # open tool. Verilator cannot read it, so the set states its simulator and this gate
+        # honours the statement rather than reporting a fault it cannot repair.
+        mk_text = mk.read_text(errors="replace")
+        m = re.search(r"^\s*SIM\s*\??=\s*(\S+)", mk_text, re.M)
+        if m and m.group(1).strip() == "xsim":
+            print(f"SKIP {mk.relative_to(root)}: the set declares SIM=xsim, which carries the"
+                  f" vendor xpm primitives that no open tool elaborates")
+            continue
+        # A set whose sources include the vendor tool tree elaborates only where that tool is
+        # installed. The set carries its own skip path and reports it, so this gate leaves it
+        # to the machine that has the tool.
+        if "XILINX_VIVADO" in mk_text:
+            print(f"SKIP {mk.relative_to(root)}: the set reads its primitives from the vendor"
+                  f" tool tree, which is absent here")
+            continue
         seen += 1
         missing = [f for f in files if not Path(f).exists()]
         rel = mk.relative_to(root)
@@ -114,10 +131,12 @@ def main():
         cmd = [verilator, "--lint-only", "-sv", "-Wno-TIMESCALEMOD", "-Wno-WIDTH",
                "-Wno-WIDTHEXPAND", "-Wno-WIDTHTRUNC", "-Wno-UNOPTFLAT",
                "-Wno-CASEINCOMPLETE", "-Wno-MULTIDRIVEN", "-Wno-SELRANGE",
+               "-Wwarn-UNDRIVEN",
                "--top-module", top] + defines + generics + files
         res = subprocess.run(cmd, capture_output=True, text=True)
         errs = [l for l in res.stderr.splitlines() if l.startswith("%Error")]
         errs = [l for l in errs if "Exiting due to" not in l]
+        errs += [l for l in res.stderr.splitlines() if "%Warning-UNDRIVEN" in l]
         shown = (" " + " ".join(generics)) if generics else ""
         if errs:
             print(f"FAIL {rel}: top {top}{shown}: {errs[0][:140]}")
