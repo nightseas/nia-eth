@@ -17,7 +17,6 @@ ctl/dcmac_ctl_pkg.sv
 ctl/dcmac_ctl_seq.sv
 ctl/wdt.sv
 ctl/dcmac_link_sample.sv
-ctl/dcmac_link_wdt.sv
 ctl/dcmac_axil_exec.sv
 ctl/dcmac_axil_arb.sv
 ctl/dcmac_mac_ctl_fsm.sv

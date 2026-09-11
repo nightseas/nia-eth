@@ -397,15 +397,23 @@ module dcmac_phy #(
   end
   endgenerate
 
+  // The repair flush covers both slots the client occupies, not the anchor alone. PG369 p112 names
+  // port 0 and port 1 for a 200G configuration on port 0, and p166 pairs the channel flush with the
+  // SerDes reset on exactly those ports. The span is the same one the SerDes reset above uses.
   logic [5:0] rx_channel_flush_i;
   always_comb begin
     rx_channel_flush_i = 6'b0;
     for (int cc = 0; cc < N_CLIENT; cc++)
       for (int p = 0; p < PORT_MAX && p < 6; p++)
         if (rx_dp_ports_s[cc*PORT_MAX + p]) rx_channel_flush_i[p] = 1'b1;
-    if (rx_flush_req[0]) rx_channel_flush_i[ANCHOR_0] = 1'b1;
-    if (N_CLIENT > 1) begin
-      if (rx_flush_req[(N_CLIENT > 1) ? 1 : 0]) rx_channel_flush_i[ANCHOR_1] = 1'b1;
+    // The compare form, not an indexed write, so no expression can reach outside [5:0]. It is the
+    // same shape the SerDes reset block below uses.
+    for (int p = 0; p < 6; p++) begin
+      if (rx_flush_req[0] && (p == ANCHOR_0 || p == ANCHOR_0 + 1))
+        rx_channel_flush_i[p] = 1'b1;
+      if (N_CLIENT > 1 && rx_flush_req[(N_CLIENT > 1) ? 1 : 0]
+          && (p == ANCHOR_1 || p == ANCHOR_1 + 1))
+        rx_channel_flush_i[p] = 1'b1;
     end
   end
 
@@ -1010,17 +1018,22 @@ module dcmac_phy #(
   end
   endgenerate
 
+  // `rx_serdes_reset_req` is the per client repair request of dcmac_mac_ctl_fsm. It reaches both
+  // slots of its own client and neither slot of the sibling, so PG369 p112 is met for a 200GAUI-2
+  // port while p166's "does not affect other active ports" still holds. The 100GAUI-1 wrapper
+  // consumes it the same way.
   logic [5:0] rx_serdes_reset_i, tx_serdes_reset_i;
   always_comb begin
     rx_serdes_reset_i = 6'b0;
     tx_serdes_reset_i = 6'b0;
     for (int p = 0; p < 6; p++) begin
       if (p == ANCHOR_0 || p == ANCHOR_0 + 1) begin
-        rx_serdes_reset_i[p] = ~rst_rx_done_q[0];
+        rx_serdes_reset_i[p] = ~rst_rx_done_q[0] | rx_serdes_reset_req[0];
         tx_serdes_reset_i[p] = ~rst_tx_done_q[0];
       end else if (p == ANCHOR_1 || p == ANCHOR_1 + 1) begin
-        rx_serdes_reset_i[p] = ~rst_rx_done_q[1];
-        tx_serdes_reset_i[p] = ~rst_tx_done_q[1];
+        rx_serdes_reset_i[p] = ~rst_rx_done_q[(N_CLIENT > 1) ? 1 : 0]
+                             | rx_serdes_reset_req[(N_CLIENT > 1) ? 1 : 0];
+        tx_serdes_reset_i[p] = ~rst_tx_done_q[(N_CLIENT > 1) ? 1 : 0];
       end else begin
         rx_serdes_reset_i[p] = 1'b1;
         tx_serdes_reset_i[p] = 1'b1;

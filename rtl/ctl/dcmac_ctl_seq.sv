@@ -157,8 +157,15 @@ module dcmac_ctl_seq
   localparam int P_B9G    = P_B8     + 12;
   localparam int P_B9P    = P_B9G    + 2;
   localparam int P_B9C    = P_B9P    + 12;
+
+  // B10 is two records. The first releases the pin side of the SerDes reset, which B4 asserted and
+  // held across the whole configuration; the second is the port-to-channel gap. PG369 p112: "All
+  // the required ports must be in reset before performing the reset release operation. This applies
+  // to both the reset input pins as well as the associated reset register bits." So the pin is
+  // released after the register bits of B9, not before them, and B10 keeps ending B9's per-group
+  // release at 2*NP*NG.
   localparam int P_B10    = P_B9C    + 2*NP*NG;
-  localparam int P_B11    = P_B10    + 1;
+  localparam int P_B11    = P_B10    + 2;
 
   localparam int P_B17    = P_B11    + 2*NP*NG;
   localparam int P_STATS  = P_B17    + 2*NP*NG;
@@ -192,11 +199,17 @@ module dcmac_ctl_seq
 
       if (pc == P_B3) begin op = OP_WDONE; d = 32'd0; w = (32'(DONE_TIMEOUT_MS) * 32'(CYC_PER_MS)); end
 
+      // B4 asserts the receive datapath reset (operand bit 0) together with the PHY wide SerDes
+      // reset (operand bit 1, `core_serdes_reset`). PG369 p165 step 1 asserts `rx_serdes_reset` and
+      // `tx_serdes_reset` on all six ports before anything is released, and p112 requires the reset
+      // input pins to be asserted as well as the register bits. Step 2 drops the datapath reset and
+      // KEEPS the SerDes reset asserted; the first record of B10 releases it, after the register
+      // bits of B9.
       else if (pc >= P_B4 && pc < P_B4 + 5) begin
         case (pc - P_B4)
-          0: begin op = OP_PIN;   d = 32'h1; end
+          0: begin op = OP_PIN;   d = 32'h3; end
           1: begin op = OP_WAIT;  w = (32'(T_RXDP_MS) * 32'(CYC_PER_MS)); end
-          2: begin op = OP_PIN;   d = 32'h0; end
+          2: begin op = OP_PIN;   d = 32'h2; end
           3: begin op = OP_WAIT;  w = (32'(T_SERDES_MS) * 32'(CYC_PER_MS)); end
           4: begin op = OP_WDONE; d = 32'd1; w = (32'(DONE_TIMEOUT_MS) * 32'(CYC_PER_MS)); end
         endcase
@@ -268,7 +281,8 @@ module dcmac_ctl_seq
         a  = (rem % 2 == 0) ? pp(p, O_PCTL_RX) : pp(p, O_PCTL_TX);
       end
 
-      else if (pc == P_B10) begin op = OP_WAIT; w = (32'(T_PORT_CHAN_GAP_MS) * 32'(CYC_PER_MS)); end
+      else if (pc == P_B10 + 0) begin op = OP_PIN;  d = 32'h0; end
+      else if (pc == P_B10 + 1) begin op = OP_WAIT; w = (32'(T_PORT_CHAN_GAP_MS) * 32'(CYC_PER_MS)); end
 
       else if (pc >= P_B11 && pc < P_B11 + 2*NP*NG) begin
         g   = (pc - P_B11) / (2*NP);
@@ -416,8 +430,12 @@ module dcmac_ctl_seq
     end
   end
 
-  wire done_hit = rec_data[0] ? (gt_rx_reset_done == DONE_MASK)
-                              : (gt_tx_reset_done == DONE_MASK);
+  // A masked test rather than an equality test. Today the PHY wrappers drive the unused bits of
+  // both done vectors to zero, so the two forms are identical; the masked form keeps the wait
+  // reachable if a wrapper ever publishes more done bits than DONE_MASK names, where equality
+  // would silently turn every OP_WDONE into a timeout.
+  wire done_hit = rec_data[0] ? ((gt_rx_reset_done & DONE_MASK) == DONE_MASK)
+                              : ((gt_tx_reset_done & DONE_MASK) == DONE_MASK);
 
   wire [15:0] to_limit   = 16'(AXI_TIMEOUT_CYC);
 

@@ -10,8 +10,6 @@
 # SPDX-License-Identifier: BSD-2-Clause-Views
 # ---------------------------------------------------------------------------
 
-NIA_EXPECT := fail
-
 SIM_BUILD ?= sim_build_ctl_seq_main
 COCOTB_RESULTS_FILE ?= results_ctl_seq_main.xml
 

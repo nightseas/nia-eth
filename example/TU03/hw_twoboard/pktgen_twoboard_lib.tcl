@@ -292,6 +292,24 @@ proc cage_pgs {cage} {
 
 proc cage_label {cage} { return [expr {$cage == 0 ? "QSFP0" : "QSFP1"}] }
 
+# The window of a cage that transmits. At 400G window 0 transmits and window 1 is receive only, so a
+# summed transmit count would double count frames that never reached the wire.
+proc pg_is_tx {pg} { return [expr {($pg % $::twoboard_stream_count) == 0}] }
+
+proc cage_tx_pg {cage} {
+  foreach pg [cage_pgs $cage] { if {[pg_is_tx $pg]} { return $pg } }
+  return [lindex [cage_pgs $cage] 0]
+}
+
+# The receive side splits frames across the checkers of a cage in arrival order and carries no stream
+# identity, so the sum over its windows is what may be compared against the transmit count.
+proc cage_sum {result_name board cage field} {
+  upvar 1 $result_name values
+  set total 0
+  foreach pg [cage_pgs $cage] { set total [expr {$total + $values($board,$pg,$field)}] }
+  return $total
+}
+
 proc identify_instrument {} {
   set module_type [board_read A [expr {$::WINDOW_CLIENT0 + $::REG_MODULE_TYPE}]]
   set map_version [board_read A [expr {$::WINDOW_CLIENT0 + $::REG_MAP_VERSION}]]
@@ -341,6 +359,7 @@ proc identify_instrument {} {
   }
 
   set ::twoboard_line_gbps         [expr {$::twoboard_segments * 50}]
+  set ::twoboard_slots_per_cage    [expr {$::twoboard_line_gbps / 100}]
   set ::twoboard_line_bytes_per_s  [expr {$::twoboard_line_gbps * 1.0e9 / 8.0}]
   set instrument_name [expr {$::twoboard_is_axis ? "AXI-Stream" : "segmented"}]
 

@@ -40,7 +40,6 @@ module dcmac_link_ctl
   parameter int LINK_WDT_MS_MIN = 10,
   parameter int LINK_WDT_MS_MAX = 60000,
   parameter int LINK_CONFIRM_N  = 2,
-  parameter int ESC_MAX_STAGE   = 3,
   parameter int T_RXDP_MS       = 100,
   parameter int T_SETTLE_MS     = 10,
   parameter int T_ERR_MS        = 10,

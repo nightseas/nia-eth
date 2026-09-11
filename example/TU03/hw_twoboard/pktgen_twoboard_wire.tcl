@@ -38,17 +38,6 @@ proc all_generators {} {
   return $generators
 }
 
-# Sums one counter field over the generator windows of a cage. At 100G and 200G a cage has one
-# window and this returns that window's value, so the reading is unchanged. At 400G a cage has two
-# and the sum is what may be compared, because the receive side splits frames across both checkers
-# in arrival order and carries no stream identity.
-proc cage_sum {result_name board cage field} {
-  upvar 1 $result_name r
-  set total 0
-  foreach pg [cage_pgs $cage] { set total [expr {$total + $r($board,$pg,$field)}] }
-  return $total
-}
-
 # The longest interval any generator of the cage was enabled for, which is the window the summed
 # frame count was delivered in.
 proc cage_elapsed_us {result_name board cage} {
@@ -66,12 +55,6 @@ proc cage_elapsed_us {result_name board cage} {
 # nothing: "The other generator's source is left unenabled and its checker is the one that reads
 # the second receive port." So at 400G window 0 transmits and window 1 is receive only, and a
 # summed transmit count double counts frames that never reached the wire.
-proc cage_tx_pg {cage} {
-  foreach pg [cage_pgs $cage] { if {($pg % $::twoboard_stream_count) == 0} { return $pg } }
-  return [lindex [cage_pgs $cage] 0]
-}
-
-proc pg_is_tx {pg} { return [expr {($pg % $::twoboard_stream_count) == 0}] }
 
 # Reads one counter field from the transmit window of a cage.
 proc cage_tx {result_name board cage field} {

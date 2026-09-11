@@ -14,8 +14,6 @@ set burst_tmo_ms     [expr {[info exists ::env(NIA_BURST_MS)] ? $::env(NIA_BURST
 
 set ::CMD_DIAG_FIRST 0x20
 set ::CMD_DIAG_LAST  0x44
-set ::CMD_ALIGN0     0x20
-set ::ALIGN_LIVE_MASK 0x5
 
 set FRAME_LENGTH_FIXED 0
 
@@ -27,44 +25,21 @@ proc diag_words {board} {
   return $words
 }
 
-proc align_word {board cage} {
-  return [board_read $board [expr {$::WINDOW_COMMAND + $::CMD_ALIGN0 + 4*$cage}]]
-}
-
-proc align_word_ok {board} {
-  set seen 0
-  foreach cage [cage_list] {
-    set word [align_word $board $cage]
-    if {$word == 0} { continue }
-    incr seen
-    if {($word & $::ALIGN_LIVE_MASK) != $::ALIGN_LIVE_MASK} { return 0 }
-  }
-  if {$seen == 0} { return -1 }
-  return 1
+proc board_ready {board expected_mask} {
+  array set state [link_state $board]
+  if {($state(up) & $expected_mask) != $expected_mask} { return 0 }
+  return [link_aligned_matches $board $expected_mask]
 }
 
 proc aligned_mask_effective {board} {
   array set state [link_state $board]
-  if {$state(aligned) >= 0} { return $state(aligned) }
-  set mask 0
-  set seen 0
-  foreach cage [cage_list] {
-    set word [align_word $board $cage]
-    if {$word == 0} { continue }
-    incr seen
-    if {($word & $::ALIGN_LIVE_MASK) == $::ALIGN_LIVE_MASK} { set mask [expr {$mask | (1 << $cage)}] }
-  }
-  if {$seen == 0} { return -1 }
-  return $mask
+  return $state(aligned)
 }
 
-proc board_ready {board expected_mask} {
-  array set state [link_state $board]
-  if {($state(up) & $expected_mask) != $expected_mask} { return 0 }
-  set word_ok [align_word_ok $board]
-  if {$word_ok == 0} { return 0 }
-  if {$word_ok == 1} { return 1 }
-  return [link_aligned_matches $board $expected_mask]
+proc aligned_text {board} {
+  set mask [aligned_mask_effective $board]
+  if {$mask < 0} { return "not-published" }
+  return [format "0x%X" $mask]
 }
 
 proc state_line {tag board} {
@@ -91,34 +66,34 @@ proc signature {board} {
 proc all_generators {} {
   set generators {}
   foreach board [board_list] {
-    foreach cage [cage_list] { lappend generators [list $board $cage] }
+    foreach pg [pg_list] { lappend generators [list $board $pg] }
   }
   return $generators
 }
 
+
 proc run_burst {length frame_limit timeout_ms} {
   set generators [all_generators]
+  set senders {}
   foreach generator $generators {
-    lassign $generator board cage
-    generator_configure $board $cage $length $::FRAME_LENGTH_FIXED $frame_limit
+    lassign $generator board pg
+    generator_configure $board $pg $length $::FRAME_LENGTH_FIXED $frame_limit
+    generator_clear_counters $board $pg
+    if {[pg_is_tx $pg]} { lappend senders $generator }
   }
-  foreach generator $generators {
-    lassign $generator board cage
-    generator_clear_counters $board $cage
+  foreach generator $senders {
+    lassign $generator board pg
+    generator_enable $board $pg
   }
-  foreach generator $generators {
-    lassign $generator board cage
-    generator_enable $board $cage
-  }
-  set outstanding [llength $generators]
+  set outstanding [llength $senders]
   array set done {}
   set poll_start_us [microseconds_now]
   while {$outstanding > 0} {
-    foreach generator $generators {
-      lassign $generator board cage
-      if {[info exists done($board,$cage)]} { continue }
-      if {[generator_is_done $board $cage]} {
-        set done($board,$cage) 1
+    foreach generator $senders {
+      lassign $generator board pg
+      if {[info exists done($board,$pg)]} { continue }
+      if {[generator_is_done $board $pg]} {
+        set done($board,$pg) 1
         incr outstanding -1
       }
     }
@@ -128,10 +103,10 @@ proc run_burst {length frame_limit timeout_ms} {
   array set result {}
   set result(timed_out) [expr {$outstanding > 0}]
   foreach generator $generators {
-    lassign $generator board cage
-    array set counters [generator_counters $board $cage]
+    lassign $generator board pg
+    array set counters [generator_counters $board $pg]
     foreach field {tx_frames tx_bytes rx_frames rx_bytes rx_err_frames mismatch status} {
-      set result($board,$cage,$field) $counters($field)
+      set result($board,$pg,$field) $counters($field)
     }
   }
   return [array get result]
@@ -185,8 +160,8 @@ while {1} {
   after 100
 }
 
-set ::row_first_a [format "0x%X/0x%X" $state_a(up) [aligned_mask_effective A]]
-set ::row_first_b [format "0x%X/0x%X" $state_b(up) [aligned_mask_effective B]]
+set ::row_first_a [format "0x%X/%s" $state_a(up) [aligned_text A]]
+set ::row_first_b [format "0x%X/%s" $state_b(up) [aligned_text B]]
 set ::row_fault [expr {$state_a(link_fault) || $state_b(link_fault)}]
 set ::row_access [expr {$state_a(access_fault) || $state_b(access_fault)}]
 set ::row_retry [expr {$state_a(retry) > $state_b(retry) ? $state_a(retry) : $state_b(retry)}]
@@ -195,10 +170,10 @@ foreach board [board_list] { state_line "CYCLE $cycle_index FIRST" $board }
 
 if {!$both_ready} {
   foreach board [board_list] {
-    foreach cage [cage_list] {
-      set window [client_window $cage]
-      puts [format "CYCLE %d CAPTURE board %s cage %d status 0x%08X rx_frames %d rx_err %d" \
-            $cycle_index $board $cage \
+    foreach pg [pg_list] {
+      set window [client_window $pg]
+      puts [format "CYCLE %d CAPTURE board %s window %d status 0x%08X rx_frames %d rx_err %d" \
+            $cycle_index $board $pg \
             [board_read $board [expr {$window + $::REG_STATUS}]] \
             [board_read $board [expr {$window + $::REG_RX_FRAMES}]] \
             [board_read $board [expr {$window + $::REG_RX_ERR_FRAMES}]]]
@@ -249,12 +224,13 @@ foreach length $equality_lengths {
   foreach board [board_list] {
     foreach cage [cage_list] {
       set peer [far_board $board]
-      set tx_frames $result($board,$cage,tx_frames)
-      set tx_bytes  $result($board,$cage,tx_bytes)
-      set rx_frames $result($peer,$cage,rx_frames)
-      set rx_bytes  $result($peer,$cage,rx_bytes)
-      set err       $result($peer,$cage,rx_err_frames)
-      set mismatch  $result($peer,$cage,mismatch)
+      set tx_pg [cage_tx_pg $cage]
+      set tx_frames $result($board,$tx_pg,tx_frames)
+      set tx_bytes  $result($board,$tx_pg,tx_bytes)
+      set rx_frames [cage_sum result $peer $cage rx_frames]
+      set rx_bytes  [cage_sum result $peer $cage rx_bytes]
+      set err       [cage_sum result $peer $cage rx_err_frames]
+      set mismatch  [cage_sum result $peer $cage mismatch]
       set ::row_mismatch [expr {$::row_mismatch + $mismatch}]
       set ::row_err_frames [expr {$::row_err_frames + $err}]
       set exact [expr {$tx_frames == $rx_frames && $tx_bytes == $rx_bytes
@@ -282,7 +258,7 @@ foreach board [board_list] {
   array set state [state_line "CYCLE $cycle_index SECOND" $board]
   if {![board_ready $board $expected_mask]} {
     set traffic_ok 0
-    set traffic_detail "board $board left traffic with up 0x[format %X $state(up)] aligned 0x[format %X $state(aligned)] align_word 0x[format %08X [align_word $board 0]]"
+    set traffic_detail "board $board left traffic with up 0x[format %X $state(up)] aligned 0x[format %X $state(aligned)] mac_fsm 0x[format %02X $state(mac_fsm)]"
   }
   if {$state(link_fault)}   { set ::row_fault 1 }
   if {$state(access_fault)} { set ::row_access 1 }

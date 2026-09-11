@@ -385,15 +385,18 @@ module dcmac_phy #(
   end
   endgenerate
 
+  // The repair flush covers every slot the client occupies, not the anchor alone. PG369 p112 names
+  // ports 0 to 3 for a 400GAUI-4 configuration, and p166 pairs the channel flush with the SerDes
+  // reset on exactly those ports. The span is the same one the SerDes reset above uses.
   logic [5:0] rx_channel_flush_i;
   always_comb begin
     rx_channel_flush_i = 6'b0;
     for (int cc = 0; cc < N_CLIENT; cc++)
       for (int p = 0; p < PORT_MAX && p < 6; p++)
         if (rx_dp_ports_s[cc*PORT_MAX + p]) rx_channel_flush_i[p] = 1'b1;
-    if (rx_flush_req[0]) rx_channel_flush_i[ANCHOR_0] = 1'b1;
-    if (N_CLIENT > 1) begin
-      if (rx_flush_req[(N_CLIENT > 1) ? 1 : 0]) rx_channel_flush_i[ANCHOR_1] = 1'b1;
+    if (rx_flush_req[0]) begin
+      for (int p = 0; p < 6; p++)
+        if (p >= ANCHOR_0 && p < ANCHOR_0 + N_SEG/2) rx_channel_flush_i[p] = 1'b1;
     end
   end
 
@@ -984,13 +987,17 @@ module dcmac_phy #(
   end
   endgenerate
 
+  // `rx_serdes_reset_req` is the per client repair request of dcmac_mac_ctl_fsm. It reaches every
+  // slot the client occupies and no other, so PG369 p112 is met for a 400GAUI-4 port ("Assert the
+  // resets for port 0, 1, 2 and 3") while p166's "does not affect other active ports" still holds.
+  // The 100GAUI-1 wrapper consumes it the same way.
   logic [5:0] rx_serdes_reset_i, tx_serdes_reset_i;
   always_comb begin
     rx_serdes_reset_i = 6'b0;
     tx_serdes_reset_i = 6'b0;
     for (int p = 0; p < 6; p++) begin
       if (p >= ANCHOR_0 && p < ANCHOR_0 + N_SEG/2) begin
-        rx_serdes_reset_i[p] = ~rst_rx_done_q[0];
+        rx_serdes_reset_i[p] = ~rst_rx_done_q[0] | rx_serdes_reset_req[0];
         tx_serdes_reset_i[p] = ~rst_tx_done_q[0];
       end else begin
         rx_serdes_reset_i[p] = 1'b1;

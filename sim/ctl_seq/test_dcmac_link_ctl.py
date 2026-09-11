@@ -25,7 +25,6 @@ ANCHOR_1 = int(os.environ.get("ANCHOR_1", "1"))
 CYC_PER_MS = int(os.environ.get("CYC_PER_MS", "20"))
 LINK_WDT_MS = int(os.environ.get("LINK_WDT_MS", "20"))
 LINK_CONFIRM_N = int(os.environ.get("LINK_CONFIRM_N", "2"))
-ESC_MAX_STAGE = int(os.environ.get("ESC_MAX_STAGE", "3"))
 T_RXDP_MS = int(os.environ.get("T_RXDP_MS", "5"))
 DONE_MASK = int(os.environ.get("DONE_MASK", "3"))
 
@@ -39,8 +38,6 @@ T_SAMPLE_MS = int(os.environ.get("T_SAMPLE_MS", "2"))
 
 WDT_CYC = LINK_WDT_MS * CYC_PER_MS
 
-STAGE3 = ESC_MAX_STAGE >= 3
-BRINGUP_CYC = 250_000
 
 def anchor_of(g):
     return ANCHOR if g == 0 else ANCHOR_1
@@ -205,12 +202,6 @@ async def test_ns56_a_group_in_escalation_does_not_freeze_its_sibling(dut):
     if N_GROUP < 2:
         dut._log.info("NIA_NS56 skip N_GROUP=%d - this property needs two groups", N_GROUP)
         return
-    if STAGE3:
-        dut._log.info("NIA_NS56 skip ESC_MAX_STAGE=%d - stage 3 re-runs the SHARED bring-up, so a "
-                      "sibling IS disturbed by design (plan decision D2). This property is checked "
-                      "on the `rxonly` and `stage2` variants, and D2 itself is asserted by "
-                      "test_d2_stage3_restarts_the_shared_bringup.", ESC_MAX_STAGE)
-        return
     model = await _start(dut, aligned=True)
     assert await _wait_bringup(dut), "bring-up never halted"
     await ClockCycles(dut.aclk, WDT_CYC * 2)
@@ -248,11 +239,6 @@ async def test_ns57_the_sibling_keeps_being_polled(dut):
     if N_GROUP < 2:
         dut._log.info("NIA_NS57 skip N_GROUP=%d", N_GROUP)
         return
-    if STAGE3:
-        dut._log.info("NIA_NS57 skip ESC_MAX_STAGE=%d - once stage 3 restarts bring-up the bus "
-                      "belongs to bring-up and the supervisors are disabled, which is D2 rather "
-                      "than starvation. Checked on `rxonly` and `stage2`.", ESC_MAX_STAGE)
-        return
     model = await _start(dut, aligned=True)
     assert await _wait_bringup(dut), "bring-up never halted"
     model.aligned[0] = False
@@ -275,12 +261,12 @@ async def test_ns55_recovery_after_an_arbitrarily_long_outage(dut):
     model.aligned[0] = False
     if N_GROUP > 1:
         model.aligned[1] = False
-    await ClockCycles(dut.aclk, WDT_CYC * 12 + (BRINGUP_CYC if STAGE3 else 0))
+    await ClockCycles(dut.aclk, WDT_CYC * 12)
     esc = int(dut.sup_esc_count.value) & 0xFFFF
-    least = 1 if STAGE3 else 3
+    least = 3
     assert esc >= least, \
-        (f"only {esc} escalations over twelve windows - the supervisor gave up "
-         f"(ESC_MAX_STAGE={ESC_MAX_STAGE}, so at least {least} was required)")
+        (f"only {esc} repair requests over twelve windows - the supervisor gave up "
+         f"(at least {least} was required)")
     assert _bit(dut.link_up, 0) == 0, "the link is reported up while its responder is unaligned"
     assert int(dut.bringup_restart_req.value) == 0, \
         "this test wrote a host request, which would invalidate the criterion it is testing"
@@ -288,7 +274,7 @@ async def test_ns55_recovery_after_an_arbitrarily_long_outage(dut):
     for g in range(N_GROUP):
         model.aligned[g] = True
     ok = None
-    for c in range(WDT_CYC * 8 + T_RXDP_MS * CYC_PER_MS * 8 + (BRINGUP_CYC if STAGE3 else 0)):
+    for c in range(WDT_CYC * 8 + T_RXDP_MS * CYC_PER_MS * 8):
         await RisingEdge(dut.aclk)
         if all(_bit(dut.link_up, g) == 1 for g in range(N_GROUP)):
             ok = c
@@ -352,7 +338,7 @@ async def test_ns61_the_rise_publishes_on_the_first_aligned_poll(dut):
     model.aligned[0] = True
     n_before = len(model.polls_of(0))
     rose_after_polls = None
-    for _ in range(WDT_CYC * 6 + T_RXDP_MS * CYC_PER_MS * 6 + (BRINGUP_CYC if STAGE3 else 0)):
+    for _ in range(WDT_CYC * 6 + T_RXDP_MS * CYC_PER_MS * 6):
         await RisingEdge(dut.aclk)
         if _bit(dut.link_up, 0) == 1:
             rose_after_polls = len(model.polls_of(0)) - n_before

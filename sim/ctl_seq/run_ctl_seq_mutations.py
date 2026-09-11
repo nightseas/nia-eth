@@ -31,7 +31,7 @@ FIXED_B5W = ("      else if (pc == P_B5W) begin op = OP_WAIT; "
              "w = (32'(T_STEP2_MS) * 32'(CYC_PER_MS)); end")
 DEFECT_B5W = "      else if (pc == P_B5W) begin op = OP_WAIT; w = 16'(T_STEP2_MS); end"
 
-FIXED_B10 = ("      else if (pc == P_B10) begin op = OP_WAIT; "
+FIXED_B10 = ("      else if (pc == P_B10 + 1) begin op = OP_WAIT; "
              "w = (32'(T_PORT_CHAN_GAP_MS) * 32'(CYC_PER_MS)); end")
 
 MUTANTS = [
@@ -57,7 +57,7 @@ MUTANTS = [
              "record - B10's 50 ms port/channel gap, which both references use and which "
   "had already been dropped once (gap (b))."),
         anchor=FIXED_B10,
-        replace=("      else if (pc == P_B10) begin op = OP_WAIT; "
+        replace=("      else if (pc == P_B10 + 1) begin op = OP_WAIT; "
                  "w = 32'(T_PORT_CHAN_GAP_MS); end"),
     ),
 ]

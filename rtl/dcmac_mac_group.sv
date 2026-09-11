@@ -52,7 +52,6 @@ module dcmac_mac_group #(
   parameter integer LINK_WDT_MS_MIN = 10,
   parameter integer LINK_WDT_MS_MAX = 60000,
 
-  parameter integer ESC_MAX_STAGE   = 3,
 
   parameter integer LINK_CONFIRM_N   = 2,
 

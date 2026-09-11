@@ -21,6 +21,8 @@ O_TICK_RX = 0x0F4
 O_PCTL_TX = 0x0F8
 O_TICK_TX = 0x0FC
 O_RX_PHY_STATUS = 0xC00
+O_RX_PHY_RT_STATUS = 0xC04
+O_RX_MAC_RT_STATUS = 0x144
 STAT_OFFS = [0x200, 0x208, 0x210, 0x218, 0x400, 0x408, 0x410, 0x418,
              0xE48, 0xE50, 0xE58]
 
@@ -117,7 +119,7 @@ def stats_reads(nports=1, anchor=0, base=0):
 def closed_address_set(base=0):
     offs = [O_CONFIG_REV, O_GLOBAL_MODE, O_CHCTL_RX, O_CHCTL_TX, O_TX_MODE,
             O_RX_MODE, O_PCTL_RX, O_TICK_RX, O_PCTL_TX, O_TICK_TX,
-            O_RX_PHY_STATUS]
+            O_RX_PHY_STATUS, O_RX_PHY_RT_STATUS, O_RX_MAC_RT_STATUS]
     for s in STAT_OFFS:
         offs += [s, s + 4]
     s = set(base + o for o in offs)

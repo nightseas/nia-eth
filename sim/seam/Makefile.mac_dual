@@ -25,7 +25,6 @@ RTL_DIR := $(HERE)/../../rtl
 VERILOG_SOURCES := \
   $(RTL_DIR)/ctl/dcmac_ctl_pkg.sv \
   $(RTL_DIR)/ctl/dcmac_ctl_seq.sv \
-  $(RTL_DIR)/ctl/dcmac_link_wdt.sv \
   $(RTL_DIR)/ctl/dcmac_link_sample.sv \
   $(RTL_DIR)/ctl/wdt.sv \
   $(RTL_DIR)/ctl/dcmac_axil_exec.sv \
@@ -80,8 +79,6 @@ export LINK_WDT_MS_MIN ?= 1
 export T_SAMPLE_MS     ?= 1
 export LINK_WDT_MS_MAX ?= 60000
 export LINK_CONFIRM_N  ?= 2
-export ESC_MAX_STAGE   ?= 3
-export T_RXDP_MS_ESC   ?= 2
 export EN_RR_POLL      ?= 1
 
 export NIA_BRINGUP_US ?= 400
@@ -116,7 +113,6 @@ ifeq ($(SIM),verilator)
     COMPILE_ARGS += -GLINK_WDT_MS=$(LINK_WDT_MS) -GLINK_WDT_MS_MIN=$(LINK_WDT_MS_MIN) \
                     -GT_SAMPLE_MS=$(T_SAMPLE_MS)
     COMPILE_ARGS += -GLINK_WDT_MS_MAX=$(LINK_WDT_MS_MAX) -GLINK_CONFIRM_N=$(LINK_CONFIRM_N)
-    COMPILE_ARGS += -GESC_MAX_STAGE=$(ESC_MAX_STAGE)
     COMPILE_ARGS += -GEN_RR_POLL=$(EN_RR_POLL)
 
     ifeq ($(FF_BRAM),1)
@@ -131,18 +127,12 @@ COCOTB_HDL_TIMEPRECISION ?= 1ps
 
 include $(shell cocotb-config --makefiles)/Makefile.sim
 
-.PHONY: monitor control rxonly stage2
-
-rxonly:
-	$(MAKE) -f $(THIS_MK) ESC_MAX_STAGE=1
-
-stage2:
-	$(MAKE) -f $(THIS_MK) ESC_MAX_STAGE=2
+.PHONY: monitor control
 
 monitor:
 	@echo "NIA_NOOP Makefile.mac_dual: 'monitor' is superseded by.. - every image supervises now. Running the default variant."
 	$(MAKE) -f $(THIS_MK)
 
 control:
-	@echo "NIA_NOOP Makefile.mac_dual: 'control' (EN_MONITOR=0) no longer exists. The control variant is 'rxonly' (ESC_MAX_STAGE=1). Running that."
-	$(MAKE) -f $(THIS_MK) ESC_MAX_STAGE=1
+	@echo "NIA_NOOP Makefile.mac_dual: 'control' (EN_MONITOR=0) no longer exists. Every image supervises. Running the default variant."
+	$(MAKE) -f $(THIS_MK)
