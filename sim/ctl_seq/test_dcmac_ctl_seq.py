@@ -27,6 +27,7 @@ CYC_PER_MS = int(os.environ.get("CYC_PER_MS", "20"))
 POLL_TRIES = int(os.environ.get("POLL_TRIES", "3"))
 RATE_CODE = int(os.environ.get("RATE_CODE", "0"))
 RATE_FIELD = int(os.environ.get("RATE_FIELD", "4"))
+LANE_RATE_HI = int(os.environ.get("LANE_RATE_HI", "1")) != 0
 DONE_MASK = int(os.environ.get("DONE_MASK", "3"))
 RX_CYCLES = 6 if NPORTS > 1 else 3
 CLK_NS = 4
@@ -91,7 +92,7 @@ async def _wait_settle(dut, limit=None):
 
 def _cfg_golden():
     return G.config_phase(nports=NPORTS, anchor=ANCHOR, rate=RATE_CODE,
-                          field=RATE_FIELD)
+                          field=RATE_FIELD, lane_hi=LANE_RATE_HI)
 
 def _first_index(tuples, needle):
     for i, t in enumerate(tuples):

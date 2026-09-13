@@ -59,16 +59,16 @@ Image:
                      defines module dcmac_phy
   NIA_GAUI           the electrical lane count of one client. It defaults to the
                      count each rate has always built with: 1 at 100, 2 at 200
-                     and 4 at 400, so every configuration this release builds
-                     runs 112G PAM4, 106.25 Gb/s a lane. NIA_RATE=200 with
-                     NIA_GAUI=4 names the dual 200GAUI-4 configuration, four
-                     lanes of 53.125 Gb/s on the two quads of each cage, and it
-                     is REFUSED: 200GAUI-4 is out of scope for this release and
-                     the wizards carried here are preset at the wrong lane rate.
-                     See plan Section 11.32.9. The log proves the choice:
-                     IP GAUI, IP CONFIG and IMAGE GAUI, plus NIA_RATE_GTWIZ
-                     naming the lane count, the quad count and the lane rate
-                     preset each wizard was configured with
+                     and 4 at 400, which run 112G PAM4, 106.25 Gb/s a lane.
+                     NIA_RATE=200 with NIA_GAUI=4 names the dual 200GAUI-4
+                     configuration, four lanes of 53.125 Gb/s on the two quads
+                     of each cage, sixteen serial pins in all. It builds from
+                     the wizard pair of ip/rate200g4 and it links: the port mode
+                     words take the low lane rate class there, bit 9 and bit 12,
+                     which the three 106.25 Gb/s configurations do not. The log
+                     proves the choice: IP GAUI, IP CONFIG and IMAGE GAUI, plus
+                     NIA_RATE_GTWIZ naming the lane count, the quad count and
+                     the lane rate preset each wizard was configured with
   NIA_XDC            the timing constraints, default the TU03 set under
                      example/TU03/fpga/constraints
   NIA_XDC_PHYS       the post synthesis placement and waivers, default the TU03

@@ -1,7 +1,25 @@
 // ---------------------------------------------------------------------------
-// File        : dcmac_phy_wrapper_200g.sv
-// Description : The PHY of the 200GAUI-2 configuration, presenting the same boundary as
-//               the 100G one with the transceiver wizard of that rate.
+// File        : dcmac_phy_wrapper_200g4.sv
+// Description : The PHY of the 200GAUI-4 configuration, four lanes of 53.125 Gb/s a cage,
+//               presenting the same boundary as the other rates.
+//
+//               Each cage takes two GTM quads, so the image occupies four: QSFP0 is quads
+//               202 and 203 and QSFP1 is quads 204 and 205. This board routes CH0 and CH2 of
+//               each quad to its cage, so of the eight lanes a wizard carries, the four the
+//               port uses are lanes 0, 2, 4 and 6, and lanes 1, 3, 5 and 7 are driven to zero
+//               with their receive discarded.
+//
+//               The wizard shape is fixed by the IP and was established by measurement rather
+//               than choice: at GTM-PAM4_Ethernet_53G it takes one quad with four lanes or two
+//               quads with eight, its channel map is derived and cannot be redirected, and a
+//               lane count of two or one is refused with IP_Flow 19-3478. The two quad eight
+//               lane shape is therefore the only one that reaches this board's four lanes a
+//               cage. See results/dcmac/eth_200g4_probe_20260911/FINDINGS.txt of nia-dev.
+//
+//               IMPORTANT: one reference clock buffer a cage feeds both quads of that cage,
+//               which keeps the top level port list of the other rates. PG369 page 201 states
+//               that each quad uses its own gt_ref_clk in AMD's own configurations, so if the
+//               placer refuses the shared route this is the first thing to split.
 // Author      : Xiaohai Li <haixiaolee@gmail.com>
 // Language    : SystemVerilog
 //
@@ -32,19 +50,23 @@ module dcmac_phy #(
   parameter int         TX_PRECURSOR           = dcmac_ctl_pkg::TX_PRE_DEFAULT,
   parameter int         TX_POSTCURSOR          = dcmac_ctl_pkg::TX_POST_DEFAULT,
 
-  parameter logic [7:0] POLARITY_TX_Q0         = dcmac_ctl_pkg::QSFP0_TXPOLARITY,
-  parameter logic [7:0] POLARITY_RX_Q0         = dcmac_ctl_pkg::QSFP0_RXPOLARITY,
-  parameter logic [7:0] POLARITY_TX_Q1         = dcmac_ctl_pkg::QSFP1_TXPOLARITY,
-  parameter logic [7:0] POLARITY_RX_Q1         = dcmac_ctl_pkg::QSFP1_RXPOLARITY,
-  parameter logic [7:0] POLARITY_TX_Q2         = 8'b0000_0000,
-  parameter logic [7:0] POLARITY_RX_Q2         = 8'b0000_0000,
-  parameter logic [7:0] POLARITY_TX_Q3         = 8'b0000_0000,
-  parameter logic [7:0] POLARITY_RX_Q3         = 8'b0000_0000,
+  // Four banks, one vector each, channel 0 in bit 0: Q0 is 202 and Q1 is 203 for QSFP0, Q2 is
+  // 204 and Q3 is 205 for QSFP1. The literals are ip/dcmac_polarity.tcl and they are written
+  // here rather than taken from dcmac_ctl_pkg::QSFP1_*, whose rows describe bank 204 alone and
+  // whose receive half differs from banks 203 and 205.
+  parameter logic [7:0] POLARITY_TX_Q0         = 8'b0000_1100,
+  parameter logic [7:0] POLARITY_RX_Q0         = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_TX_Q1         = 8'b0000_0011,
+  parameter logic [7:0] POLARITY_RX_Q1         = 8'b0000_1111,
+  parameter logic [7:0] POLARITY_TX_Q2         = 8'b0000_0011,
+  parameter logic [7:0] POLARITY_RX_Q2         = 8'b0000_0011,
+  parameter logic [7:0] POLARITY_TX_Q3         = 8'b0000_0011,
+  parameter logic [7:0] POLARITY_RX_Q3         = 8'b0000_1111,
 
   // The transceiver serial pin count of the whole image, four a quad. Every implementation
   // of dcmac_phy declares it, because choosing between them is a file list swap and their
   // port lists shall stay identical.
-  parameter int         GT_LANES         = 8
+  parameter int         GT_LANES         = 16
 )(
 
   input  wire                              sys_reset,
@@ -53,16 +75,6 @@ module dcmac_phy #(
   input  wire                              gt_ref_clk0_n,
   input  wire                              gt_ref_clk1_p,
   input  wire                              gt_ref_clk1_n,
-  // The third and the fourth reference clock pairs, which the four quad 200GAUI-4 configuration
-  // uses for the second quad of each cage: PG369 page 201 states that each quad uses its own
-  // gt_ref_clk, and this board drives REFCLK0 of banks 202, 203, 204 and 205 from one 156.25 MHz
-  // buffer, `refcode/iBERT/ibert_loopback_test_config.md` line 598. Every other configuration
-  // leaves them unused, and every PHY implementation carries them because choosing between the
-  // implementations is a file list swap.
-  input  wire                              gt_ref_clk2_p,
-  input  wire                              gt_ref_clk2_n,
-  input  wire                              gt_ref_clk3_p,
-  input  wire                              gt_ref_clk3_n,
 
   input  wire [GT_LANES-1:0]             gt_rxp_in,
   input  wire [GT_LANES-1:0]             gt_rxn_in,
@@ -101,8 +113,6 @@ module dcmac_phy #(
   input  wire [N_CLIENT-1:0]               ctl_tx_send_rfi,
 
   input  wire [N_CLIENT-1:0]               rx_datapath_reset,
-  input  wire [N_CLIENT-1:0]               rx_pll_datapath_reset,
-  input  wire [N_CLIENT-1:0]               gt_all_reset,
   input  wire [N_CLIENT-1:0]               rx_serdes_reset_req,
   input  wire [N_CLIENT-1:0]               rx_flush_req,
   input  wire [N_CLIENT*PORT_MAX-1:0]      rx_datapath_reset_ports,
@@ -149,23 +159,31 @@ module dcmac_phy #(
     if (ANCHOR_0 + 1 == ANCHOR_1 || ANCHOR_1 + 1 == ANCHOR_0)
       $fatal(1, "dcmac_phy: violated - a 200GAUI-2 port spans two MAC slots, so ANCHOR_0=%0d and ANCHOR_1=%0d overlap. The dual200 IP anchors the clients at slots 0 and 2 (tx_axis_tvalid_0 and tx_axis_tvalid_2).",
              ANCHOR_0, ANCHOR_1);
-    if (POLARITY_TX_Q0[1:0] != 2'b00 || POLARITY_RX_Q0[1:0] != 2'b00)
-      $fatal(1, "dcmac_phy: violated - QSFP0/bank202 CH0 requires TX_INV=0 RX_INV=0 but POLARITY_TX_Q0=%b POLARITY_RX_Q0=%b",
+    // A polarity vector is one bank, channel 0 in bit 0, which is the convention of
+    // ip/dcmac_polarity.tcl and of the 400GAUI-4 wrapper. This configuration carries four
+    // banks: Q0 is 202 and Q1 is 203 for QSFP0, Q2 is 204 and Q3 is 205 for QSFP1. Only CH0
+    // and CH2 of each are wired to a cage, and those are the bits the link depends on.
+    if (POLARITY_TX_Q0[0] != 1'b0 || POLARITY_TX_Q0[2] != 1'b1 ||
+        POLARITY_RX_Q0[0] != 1'b0 || POLARITY_RX_Q0[2] != 1'b0)
+      $fatal(1, "dcmac_phy: violated - bank 202 wired lanes require TX 0 on CH0 and 1 on CH2 with RX 0 on both, and POLARITY_TX_Q0=%b POLARITY_RX_Q0=%b. Building a lane at the wrong polarity gives a link that never aligns and looks exactly like silicon.",
              POLARITY_TX_Q0, POLARITY_RX_Q0);
-    if (POLARITY_TX_Q0[3:2] != 2'b11 || POLARITY_RX_Q0[3:2] != 2'b00)
-      $fatal(1, "dcmac_phy: violated - QSFP0/bank202 CH2/CH3 require TX_INV=1 RX_INV=0 (ip/dcmac_polarity.tcl nia_dp_pol_tx(202) = {0 0 1 1}) but POLARITY_TX_Q0=%b POLARITY_RX_Q0=%b. At 100GAUI-1 these two lanes were unused; at 200GAUI-2 they carry half the port and building them at 0 gives a link that never aligns and looks exactly like silicon.",
-             POLARITY_TX_Q0, POLARITY_RX_Q0);
-    if (POLARITY_TX_Q1[1:0] != 2'b11 || POLARITY_RX_Q1[1:0] != 2'b11)
-      $fatal(1, "dcmac_phy: violated - QSFP1/bank204 CH0 requires TX_INV=1 RX_INV=1 (inversion REQUIRED) but POLARITY_TX_Q1=%b POLARITY_RX_Q1=%b. Building at 0 gives a link that never aligns and looks exactly like silicon.",
+    if (POLARITY_TX_Q1[0] != 1'b1 || POLARITY_TX_Q1[2] != 1'b0 ||
+        POLARITY_RX_Q1[0] != 1'b1 || POLARITY_RX_Q1[2] != 1'b1)
+      $fatal(1, "dcmac_phy: violated - bank 203 wired lanes require TX 1 on CH0 and 0 on CH2 with RX 1 on both, and POLARITY_TX_Q1=%b POLARITY_RX_Q1=%b",
              POLARITY_TX_Q1, POLARITY_RX_Q1);
-    if (POLARITY_TX_Q1[3:2] != 2'b00 || POLARITY_RX_Q1[3:2] != 2'b00)
-      $fatal(1, "dcmac_phy: violated - QSFP1/bank204 CH2/CH3 require TX_INV=0 RX_INV=0 (ip/dcmac_polarity.tcl nia_dp_pol_tx(204) = {1 1 0 0}) but POLARITY_TX_Q1=%b POLARITY_RX_Q1=%b",
-             POLARITY_TX_Q1, POLARITY_RX_Q1);
+    if (POLARITY_TX_Q2[0] != 1'b1 || POLARITY_TX_Q2[2] != 1'b0 ||
+        POLARITY_RX_Q2[0] != 1'b1 || POLARITY_RX_Q2[2] != 1'b0)
+      $fatal(1, "dcmac_phy: violated - bank 204 wired lanes require TX 1 on CH0 and 0 on CH2 with RX 1 on CH0 and 0 on CH2, and POLARITY_TX_Q2=%b POLARITY_RX_Q2=%b",
+             POLARITY_TX_Q2, POLARITY_RX_Q2);
+    if (POLARITY_TX_Q3[0] != 1'b1 || POLARITY_TX_Q3[2] != 1'b0 ||
+        POLARITY_RX_Q3[0] != 1'b1 || POLARITY_RX_Q3[2] != 1'b1)
+      $fatal(1, "dcmac_phy: violated - bank 205 wired lanes require TX 1 on CH0 and 0 on CH2 with RX 1 on both, and POLARITY_TX_Q3=%b POLARITY_RX_Q3=%b",
+             POLARITY_TX_Q3, POLARITY_RX_Q3);
   end
   // synthesis translate_on
 
-  wire QUAD0_GTREFCLK0;
-  wire QUAD1_GTREFCLK0;
+  wire QSFP0_REFCLK;
+  wire QSFP1_REFCLK;
   wire bufds_odiv2_0;
   wire clk_wiz_in;
 
@@ -184,7 +202,7 @@ module dcmac_phy #(
     .IB    (gt_ref_clk0_n),
     .CEB   (1'b0),
     .ODIV2 (bufds_odiv2_0),
-    .O     (QUAD0_GTREFCLK0)
+    .O     (QSFP0_REFCLK)
   );
 
   IBUFDS_GTME5 #(
@@ -197,7 +215,7 @@ module dcmac_phy #(
     .IB    (gt_ref_clk1_n),
     .CEB   (1'b0),
     .ODIV2 (),
-    .O     (QUAD1_GTREFCLK0)
+    .O     (QSFP1_REFCLK)
   );
 
   BUFG_GT #(
@@ -248,6 +266,8 @@ module dcmac_phy #(
   wire [N_CLIENT-1:0] gtpowergood_q;
   wire [N_CLIENT-1:0] rst_tx_done_q;
   wire [N_CLIENT-1:0] rst_rx_done_q;
+  wire [7:0]          ch_tx_done_q [0:N_CLIENT-1];
+  wire [7:0]          ch_rx_done_q [0:N_CLIENT-1];
 
   genvar q;
   generate
@@ -257,7 +277,11 @@ module dcmac_phy #(
   end
   endgenerate
 
-  assign gt_ch_reset_done = '0;
+  generate
+  for (q = 0; q < N_CLIENT; q++) begin : g_ch_done
+    assign gt_ch_reset_done[16*q +: 16] = {ch_rx_done_q[q], ch_tx_done_q[q]};
+  end
+  endgenerate
 
   wire gt_rx_all_done = &rst_rx_done_q;
   wire gt_tx_all_done = &rst_tx_done_q;
@@ -362,53 +386,7 @@ module dcmac_phy #(
   end
   endgenerate
 
-  wire [N_CLIENT-1:0] gt_all_reset_stretched;
-  genvar ca;
-  generate
-  for (ca = 0; ca < N_CLIENT; ca++) begin : g_stretch_all
-    reg [SW-1:0] all_cnt   = '0;
-    reg          all_str_r = 1'b0;
-    always_ff @(posedge axis_clk) begin
-      if (!seg_rstn_locked) begin
-        all_cnt   <= '0;
-        all_str_r <= 1'b0;
-      end else if (gt_all_reset[ca]) begin
-        all_cnt   <= RX_DP_RESET_MIN_CYCLES[SW-1:0];
-        all_str_r <= 1'b1;
-      end else if (all_cnt != '0) begin
-        all_cnt   <= all_cnt - 1'b1;
-        all_str_r <= 1'b1;
-      end else begin
-        all_str_r <= 1'b0;
-      end
-    end
-    assign gt_all_reset_stretched[ca] = all_str_r;
-  end
-  endgenerate
 
-  wire [N_CLIENT-1:0] rx_pll_dp_reset_stretched;
-  genvar cp;
-  generate
-  for (cp = 0; cp < N_CLIENT; cp++) begin : g_stretch_pll
-    reg [SW-1:0] pll_cnt   = '0;
-    reg          pll_str_r = 1'b0;
-    always_ff @(posedge axis_clk) begin
-      if (!seg_rstn_locked) begin
-        pll_cnt   <= '0;
-        pll_str_r <= 1'b0;
-      end else if (rx_pll_datapath_reset[cp]) begin
-        pll_cnt   <= RX_DP_RESET_MIN_CYCLES[SW-1:0];
-        pll_str_r <= 1'b1;
-      end else if (pll_cnt != '0) begin
-        pll_cnt   <= pll_cnt - 1'b1;
-        pll_str_r <= 1'b1;
-      end else begin
-        pll_str_r <= 1'b0;
-      end
-    end
-    assign rx_pll_dp_reset_stretched[cp] = pll_str_r;
-  end
-  endgenerate
 
   // The repair flush covers both slots the client occupies, not the anchor alone. PG369 p112 names
   // port 0 and port 1 for a 200G configuration on port 0, and p166 pairs the channel flush with the
@@ -806,7 +784,9 @@ module dcmac_phy #(
 
   dcmac_0_gtwiz_versal_0 i_gtwiz0 (
     .gtwiz_freerun_clk        (freerun_clk_i),
-    .QUAD0_GTREFCLK0          (QUAD0_GTREFCLK0),
+    .QUAD0_GTREFCLK0          (QSFP0_REFCLK),
+    .QUAD1_GTREFCLK0          (QSFP0_REFCLK),
+
     .QUAD0_s_axi_lite_resetn  (~sys_reset),
     .QUAD0_s_axi_lite_araddr  (18'd0),
     .QUAD0_s_axi_lite_arvalid (1'b0),
@@ -825,10 +805,33 @@ module dcmac_phy #(
     .QUAD0_s_axi_lite_bvalid  (),
     .QUAD0_s_axi_lite_bready  (1'b1),
 
+    .QUAD1_s_axi_lite_resetn  (~sys_reset),
+    .QUAD1_s_axi_lite_araddr  (18'd0),
+    .QUAD1_s_axi_lite_arvalid (1'b0),
+    .QUAD1_s_axi_lite_arready (),
+    .QUAD1_s_axi_lite_rdata   (),
+    .QUAD1_s_axi_lite_rvalid  (),
+    .QUAD1_s_axi_lite_rready  (1'b1),
+    .QUAD1_s_axi_lite_awaddr  (18'd0),
+    .QUAD1_s_axi_lite_awvalid (1'b0),
+    .QUAD1_s_axi_lite_awready (),
+    .QUAD1_s_axi_lite_wdata   (32'd0),
+    .QUAD1_s_axi_lite_wvalid  (1'b0),
+    .QUAD1_s_axi_lite_wready  (),
+    .QUAD1_s_axi_lite_rresp   (),
+    .QUAD1_s_axi_lite_bresp   (),
+    .QUAD1_s_axi_lite_bvalid  (),
+    .QUAD1_s_axi_lite_bready  (1'b1),
+
     .QUAD0_rxp                (gt_rxp_in[3:0]),
     .QUAD0_rxn                (gt_rxn_in[3:0]),
     .QUAD0_txp                (gt_txp_out[3:0]),
     .QUAD0_txn                (gt_txn_out[3:0]),
+
+    .QUAD1_rxp                (gt_rxp_in[7:4]),
+    .QUAD1_rxn                (gt_rxn_in[7:4]),
+    .QUAD1_txp                (gt_txp_out[7:4]),
+    .QUAD1_txn                (gt_txn_out[7:4]),
 
     .QUAD0_TX0_outclk         (gt_ch0_txoutclk[0]),
     .QUAD0_RX0_outclk         (gt_ch0_rxoutclk[0]),
@@ -840,6 +843,14 @@ module dcmac_phy #(
     .QUAD0_RX2_usrclk         (gt_rx_usrclk2[0]),
     .QUAD0_TX3_usrclk         (gt_tx_usrclk2[0]),
     .QUAD0_RX3_usrclk         (gt_rx_usrclk2[0]),
+    .QUAD1_TX0_usrclk         (gt_tx_usrclk2[0]),
+    .QUAD1_RX0_usrclk         (gt_rx_usrclk2[0]),
+    .QUAD1_TX1_usrclk         (gt_tx_usrclk2[0]),
+    .QUAD1_RX1_usrclk         (gt_rx_usrclk2[0]),
+    .QUAD1_TX2_usrclk         (gt_tx_usrclk2[0]),
+    .QUAD1_RX2_usrclk         (gt_rx_usrclk2[0]),
+    .QUAD1_TX3_usrclk         (gt_tx_usrclk2[0]),
+    .QUAD1_RX3_usrclk         (gt_rx_usrclk2[0]),
 
     .QUAD0_ch0_loopback       (LOOPBACK_MODE),
     .QUAD0_ch1_loopback       (LOOPBACK_MODE),
@@ -847,20 +858,38 @@ module dcmac_phy #(
     .QUAD0_ch3_loopback       (LOOPBACK_MODE),
     .QUAD0_gpi                (32'd0),
     .QUAD0_gpo                (),
+    .QUAD1_ch0_loopback       (LOOPBACK_MODE),
+    .QUAD1_ch1_loopback       (LOOPBACK_MODE),
+    .QUAD1_ch2_loopback       (LOOPBACK_MODE),
+    .QUAD1_ch3_loopback       (LOOPBACK_MODE),
+    .QUAD1_gpi                (32'd0),
+    .QUAD1_gpo                (),
 
     .INTF0_TX0_ch_txdata      (txdata_out[0]),
     .INTF0_RX0_ch_rxdata      (rxdata_in[0]),
-    .INTF0_TX1_ch_txdata      (txdata_out[1]),
-    .INTF0_RX1_ch_rxdata      (rxdata_in[1]),
-    .INTF0_TX2_ch_txdata      (txdata_out[2]),
-    .INTF0_RX2_ch_rxdata      (rxdata_in[2]),
-    .INTF0_TX3_ch_txdata      (txdata_out[3]),
-    .INTF0_RX3_ch_rxdata      (rxdata_in[3]),
+    .INTF0_TX1_ch_txdata      (256'd0),
+    .INTF0_RX1_ch_rxdata      (),
+    .INTF0_TX2_ch_txdata      (txdata_out[1]),
+    .INTF0_RX2_ch_rxdata      (rxdata_in[1]),
+    .INTF0_TX3_ch_txdata      (256'd0),
+    .INTF0_RX3_ch_rxdata      (),
+    .INTF0_TX4_ch_txdata      (txdata_out[2]),
+    .INTF0_RX4_ch_rxdata      (rxdata_in[2]),
+    .INTF0_TX5_ch_txdata      (256'd0),
+    .INTF0_RX5_ch_rxdata      (),
+    .INTF0_TX6_ch_txdata      (txdata_out[3]),
+    .INTF0_RX6_ch_rxdata      (rxdata_in[3]),
+    .INTF0_TX7_ch_txdata      (256'd0),
+    .INTF0_RX7_ch_rxdata      (),
 
-    .INTF0_TX0_ch_txresetdone (), .INTF0_RX0_ch_rxresetdone (),
-    .INTF0_TX1_ch_txresetdone (), .INTF0_RX1_ch_rxresetdone (),
-    .INTF0_TX2_ch_txresetdone (), .INTF0_RX2_ch_rxresetdone (),
-    .INTF0_TX3_ch_txresetdone (), .INTF0_RX3_ch_rxresetdone (),
+    .INTF0_TX0_ch_txresetdone (ch_tx_done_q[0][0]), .INTF0_RX0_ch_rxresetdone (ch_rx_done_q[0][0]),
+    .INTF0_TX1_ch_txresetdone (ch_tx_done_q[0][1]), .INTF0_RX1_ch_rxresetdone (ch_rx_done_q[0][1]),
+    .INTF0_TX2_ch_txresetdone (ch_tx_done_q[0][2]), .INTF0_RX2_ch_rxresetdone (ch_rx_done_q[0][2]),
+    .INTF0_TX3_ch_txresetdone (ch_tx_done_q[0][3]), .INTF0_RX3_ch_rxresetdone (ch_rx_done_q[0][3]),
+    .INTF0_TX4_ch_txresetdone (ch_tx_done_q[0][4]), .INTF0_RX4_ch_rxresetdone (ch_rx_done_q[0][4]),
+    .INTF0_TX5_ch_txresetdone (ch_tx_done_q[0][5]), .INTF0_RX5_ch_rxresetdone (ch_rx_done_q[0][5]),
+    .INTF0_TX6_ch_txresetdone (ch_tx_done_q[0][6]), .INTF0_RX6_ch_rxresetdone (ch_rx_done_q[0][6]),
+    .INTF0_TX7_ch_txresetdone (ch_tx_done_q[0][7]), .INTF0_RX7_ch_rxresetdone (ch_rx_done_q[0][7]),
 
     .INTF0_TX0_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX0_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX0_ch_txprecursor (6'(TX_PRECURSOR)),
     .INTF0_RX0_ch_rxcdrhold    (1'b0),
@@ -870,20 +899,40 @@ module dcmac_phy #(
     .INTF0_RX2_ch_rxcdrhold    (1'b0),
     .INTF0_TX3_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX3_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX3_ch_txprecursor (6'(TX_PRECURSOR)),
     .INTF0_RX3_ch_rxcdrhold    (1'b0),
+    .INTF0_TX4_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX4_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX4_ch_txprecursor (6'(TX_PRECURSOR)),
+    .INTF0_RX4_ch_rxcdrhold    (1'b0),
+    .INTF0_TX5_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX5_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX5_ch_txprecursor (6'(TX_PRECURSOR)),
+    .INTF0_RX5_ch_rxcdrhold    (1'b0),
+    .INTF0_TX6_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX6_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX6_ch_txprecursor (6'(TX_PRECURSOR)),
+    .INTF0_RX6_ch_rxcdrhold    (1'b0),
+    .INTF0_TX7_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX7_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX7_ch_txprecursor (6'(TX_PRECURSOR)),
+    .INTF0_RX7_ch_rxcdrhold    (1'b0),
 
     .INTF0_TX0_ch_txpolarity   (POLARITY_TX_Q0[0]),
     .INTF0_TX1_ch_txpolarity   (POLARITY_TX_Q0[1]),
     .INTF0_TX2_ch_txpolarity   (POLARITY_TX_Q0[2]),
     .INTF0_TX3_ch_txpolarity   (POLARITY_TX_Q0[3]),
+    .INTF0_TX4_ch_txpolarity   (POLARITY_TX_Q1[0]),
+    .INTF0_TX5_ch_txpolarity   (POLARITY_TX_Q1[1]),
+    .INTF0_TX6_ch_txpolarity   (POLARITY_TX_Q1[2]),
+    .INTF0_TX7_ch_txpolarity   (POLARITY_TX_Q1[3]),
     .INTF0_RX0_ch_rxpolarity   (POLARITY_RX_Q0[0]),
     .INTF0_RX1_ch_rxpolarity   (POLARITY_RX_Q0[1]),
     .INTF0_RX2_ch_rxpolarity   (POLARITY_RX_Q0[2]),
     .INTF0_RX3_ch_rxpolarity   (POLARITY_RX_Q0[3]),
+    .INTF0_RX4_ch_rxpolarity   (POLARITY_RX_Q1[0]),
+    .INTF0_RX5_ch_rxpolarity   (POLARITY_RX_Q1[1]),
+    .INTF0_RX6_ch_rxpolarity   (POLARITY_RX_Q1[2]),
+    .INTF0_RX7_ch_rxpolarity   (POLARITY_RX_Q1[3]),
 
     .INTF0_TX0_ch_txrate (8'd0), .INTF0_RX0_ch_rxrate (8'd0),
     .INTF0_TX1_ch_txrate (8'd0), .INTF0_RX1_ch_rxrate (8'd0),
     .INTF0_TX2_ch_txrate (8'd0), .INTF0_RX2_ch_rxrate (8'd0),
     .INTF0_TX3_ch_txrate (8'd0), .INTF0_RX3_ch_rxrate (8'd0),
+    .INTF0_TX4_ch_txrate (8'd0), .INTF0_RX4_ch_rxrate (8'd0),
+    .INTF0_TX5_ch_txrate (8'd0), .INTF0_RX5_ch_rxrate (8'd0),
+    .INTF0_TX6_ch_txrate (8'd0), .INTF0_RX6_ch_rxrate (8'd0),
+    .INTF0_TX7_ch_txrate (8'd0), .INTF0_RX7_ch_rxrate (8'd0),
 
     .INTF0_TX0_ch_txpmaresetdone (), .INTF0_TX0_ch_txprogdivresetdone (),
     .INTF0_RX0_ch_rxpmaresetdone (), .INTF0_RX0_ch_rxprogdivresetdone (),
@@ -893,14 +942,22 @@ module dcmac_phy #(
     .INTF0_RX2_ch_rxpmaresetdone (), .INTF0_RX2_ch_rxprogdivresetdone (),
     .INTF0_TX3_ch_txpmaresetdone (), .INTF0_TX3_ch_txprogdivresetdone (),
     .INTF0_RX3_ch_rxpmaresetdone (), .INTF0_RX3_ch_rxprogdivresetdone (),
+    .INTF0_TX4_ch_txpmaresetdone (), .INTF0_TX4_ch_txprogdivresetdone (),
+    .INTF0_RX4_ch_rxpmaresetdone (), .INTF0_RX4_ch_rxprogdivresetdone (),
+    .INTF0_TX5_ch_txpmaresetdone (), .INTF0_TX5_ch_txprogdivresetdone (),
+    .INTF0_RX5_ch_rxpmaresetdone (), .INTF0_RX5_ch_rxprogdivresetdone (),
+    .INTF0_TX6_ch_txpmaresetdone (), .INTF0_TX6_ch_txprogdivresetdone (),
+    .INTF0_RX6_ch_rxpmaresetdone (), .INTF0_RX6_ch_rxprogdivresetdone (),
+    .INTF0_TX7_ch_txpmaresetdone (), .INTF0_TX7_ch_txprogdivresetdone (),
+    .INTF0_RX7_ch_rxpmaresetdone (), .INTF0_RX7_ch_rxprogdivresetdone (),
 
     .INTF0_TX_clr_out                 (gt_tx_clr_out[0]),
     .INTF0_TX_clrb_leaf_out           (gt_tx_clrb_leaf_out[0]),
     .INTF0_RX_clr_out                 (gt_rx_clr_out[0]),
     .INTF0_RX_clrb_leaf_out           (gt_rx_clrb_leaf_out[0]),
-    .INTF0_rst_all_in                 (sys_reset | gt_all_reset_stretched[0]),
+    .INTF0_rst_all_in                 (sys_reset),
     .INTF0_rst_tx_pll_and_datapath_in (1'b0),
-    .INTF0_rst_rx_pll_and_datapath_in (rx_pll_dp_reset_stretched[0]),
+    .INTF0_rst_rx_pll_and_datapath_in (1'b0),
     .INTF0_rst_tx_done_out            (rst_tx_done_q[0]),
     .INTF0_rst_rx_done_out            (rst_rx_done_q[0]),
 
@@ -911,7 +968,9 @@ module dcmac_phy #(
 
   dcmac_0_gtwiz_versal_1 i_gtwiz1 (
     .gtwiz_freerun_clk        (freerun_clk_i),
-    .QUAD0_GTREFCLK0          (QUAD1_GTREFCLK0),
+    .QUAD0_GTREFCLK0          (QSFP1_REFCLK),
+    .QUAD1_GTREFCLK0          (QSFP1_REFCLK),
+
     .QUAD0_s_axi_lite_resetn  (~sys_reset),
     .QUAD0_s_axi_lite_araddr  (18'd0),
     .QUAD0_s_axi_lite_arvalid (1'b0),
@@ -930,10 +989,33 @@ module dcmac_phy #(
     .QUAD0_s_axi_lite_bvalid  (),
     .QUAD0_s_axi_lite_bready  (1'b1),
 
-    .QUAD0_rxp                (gt_rxp_in[7:4]),
-    .QUAD0_rxn                (gt_rxn_in[7:4]),
-    .QUAD0_txp                (gt_txp_out[7:4]),
-    .QUAD0_txn                (gt_txn_out[7:4]),
+    .QUAD1_s_axi_lite_resetn  (~sys_reset),
+    .QUAD1_s_axi_lite_araddr  (18'd0),
+    .QUAD1_s_axi_lite_arvalid (1'b0),
+    .QUAD1_s_axi_lite_arready (),
+    .QUAD1_s_axi_lite_rdata   (),
+    .QUAD1_s_axi_lite_rvalid  (),
+    .QUAD1_s_axi_lite_rready  (1'b1),
+    .QUAD1_s_axi_lite_awaddr  (18'd0),
+    .QUAD1_s_axi_lite_awvalid (1'b0),
+    .QUAD1_s_axi_lite_awready (),
+    .QUAD1_s_axi_lite_wdata   (32'd0),
+    .QUAD1_s_axi_lite_wvalid  (1'b0),
+    .QUAD1_s_axi_lite_wready  (),
+    .QUAD1_s_axi_lite_rresp   (),
+    .QUAD1_s_axi_lite_bresp   (),
+    .QUAD1_s_axi_lite_bvalid  (),
+    .QUAD1_s_axi_lite_bready  (1'b1),
+
+    .QUAD0_rxp                (gt_rxp_in[11:8]),
+    .QUAD0_rxn                (gt_rxn_in[11:8]),
+    .QUAD0_txp                (gt_txp_out[11:8]),
+    .QUAD0_txn                (gt_txn_out[11:8]),
+
+    .QUAD1_rxp                (gt_rxp_in[15:12]),
+    .QUAD1_rxn                (gt_rxn_in[15:12]),
+    .QUAD1_txp                (gt_txp_out[15:12]),
+    .QUAD1_txn                (gt_txn_out[15:12]),
 
     .QUAD0_TX0_outclk         (gt_ch0_txoutclk[1]),
     .QUAD0_RX0_outclk         (gt_ch0_rxoutclk[1]),
@@ -945,6 +1027,14 @@ module dcmac_phy #(
     .QUAD0_RX2_usrclk         (gt_rx_usrclk2[1]),
     .QUAD0_TX3_usrclk         (gt_tx_usrclk2[1]),
     .QUAD0_RX3_usrclk         (gt_rx_usrclk2[1]),
+    .QUAD1_TX0_usrclk         (gt_tx_usrclk2[1]),
+    .QUAD1_RX0_usrclk         (gt_rx_usrclk2[1]),
+    .QUAD1_TX1_usrclk         (gt_tx_usrclk2[1]),
+    .QUAD1_RX1_usrclk         (gt_rx_usrclk2[1]),
+    .QUAD1_TX2_usrclk         (gt_tx_usrclk2[1]),
+    .QUAD1_RX2_usrclk         (gt_rx_usrclk2[1]),
+    .QUAD1_TX3_usrclk         (gt_tx_usrclk2[1]),
+    .QUAD1_RX3_usrclk         (gt_rx_usrclk2[1]),
 
     .QUAD0_ch0_loopback       (LOOPBACK_MODE),
     .QUAD0_ch1_loopback       (LOOPBACK_MODE),
@@ -952,20 +1042,38 @@ module dcmac_phy #(
     .QUAD0_ch3_loopback       (LOOPBACK_MODE),
     .QUAD0_gpi                (32'd0),
     .QUAD0_gpo                (),
+    .QUAD1_ch0_loopback       (LOOPBACK_MODE),
+    .QUAD1_ch1_loopback       (LOOPBACK_MODE),
+    .QUAD1_ch2_loopback       (LOOPBACK_MODE),
+    .QUAD1_ch3_loopback       (LOOPBACK_MODE),
+    .QUAD1_gpi                (32'd0),
+    .QUAD1_gpo                (),
 
     .INTF0_TX0_ch_txdata      (txdata_out[4]),
     .INTF0_RX0_ch_rxdata      (rxdata_in[4]),
-    .INTF0_TX1_ch_txdata      (txdata_out[5]),
-    .INTF0_RX1_ch_rxdata      (rxdata_in[5]),
-    .INTF0_TX2_ch_txdata      (txdata_out[6]),
-    .INTF0_RX2_ch_rxdata      (rxdata_in[6]),
-    .INTF0_TX3_ch_txdata      (txdata_out[7]),
-    .INTF0_RX3_ch_rxdata      (rxdata_in[7]),
+    .INTF0_TX1_ch_txdata      (256'd0),
+    .INTF0_RX1_ch_rxdata      (),
+    .INTF0_TX2_ch_txdata      (txdata_out[5]),
+    .INTF0_RX2_ch_rxdata      (rxdata_in[5]),
+    .INTF0_TX3_ch_txdata      (256'd0),
+    .INTF0_RX3_ch_rxdata      (),
+    .INTF0_TX4_ch_txdata      (txdata_out[6]),
+    .INTF0_RX4_ch_rxdata      (rxdata_in[6]),
+    .INTF0_TX5_ch_txdata      (256'd0),
+    .INTF0_RX5_ch_rxdata      (),
+    .INTF0_TX6_ch_txdata      (txdata_out[7]),
+    .INTF0_RX6_ch_rxdata      (rxdata_in[7]),
+    .INTF0_TX7_ch_txdata      (256'd0),
+    .INTF0_RX7_ch_rxdata      (),
 
-    .INTF0_TX0_ch_txresetdone (), .INTF0_RX0_ch_rxresetdone (),
-    .INTF0_TX1_ch_txresetdone (), .INTF0_RX1_ch_rxresetdone (),
-    .INTF0_TX2_ch_txresetdone (), .INTF0_RX2_ch_rxresetdone (),
-    .INTF0_TX3_ch_txresetdone (), .INTF0_RX3_ch_rxresetdone (),
+    .INTF0_TX0_ch_txresetdone (ch_tx_done_q[1][0]), .INTF0_RX0_ch_rxresetdone (ch_rx_done_q[1][0]),
+    .INTF0_TX1_ch_txresetdone (ch_tx_done_q[1][1]), .INTF0_RX1_ch_rxresetdone (ch_rx_done_q[1][1]),
+    .INTF0_TX2_ch_txresetdone (ch_tx_done_q[1][2]), .INTF0_RX2_ch_rxresetdone (ch_rx_done_q[1][2]),
+    .INTF0_TX3_ch_txresetdone (ch_tx_done_q[1][3]), .INTF0_RX3_ch_rxresetdone (ch_rx_done_q[1][3]),
+    .INTF0_TX4_ch_txresetdone (ch_tx_done_q[1][4]), .INTF0_RX4_ch_rxresetdone (ch_rx_done_q[1][4]),
+    .INTF0_TX5_ch_txresetdone (ch_tx_done_q[1][5]), .INTF0_RX5_ch_rxresetdone (ch_rx_done_q[1][5]),
+    .INTF0_TX6_ch_txresetdone (ch_tx_done_q[1][6]), .INTF0_RX6_ch_rxresetdone (ch_rx_done_q[1][6]),
+    .INTF0_TX7_ch_txresetdone (ch_tx_done_q[1][7]), .INTF0_RX7_ch_rxresetdone (ch_rx_done_q[1][7]),
 
     .INTF0_TX0_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX0_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX0_ch_txprecursor (6'(TX_PRECURSOR)),
     .INTF0_RX0_ch_rxcdrhold    (1'b0),
@@ -975,20 +1083,40 @@ module dcmac_phy #(
     .INTF0_RX2_ch_rxcdrhold    (1'b0),
     .INTF0_TX3_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX3_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX3_ch_txprecursor (6'(TX_PRECURSOR)),
     .INTF0_RX3_ch_rxcdrhold    (1'b0),
+    .INTF0_TX4_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX4_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX4_ch_txprecursor (6'(TX_PRECURSOR)),
+    .INTF0_RX4_ch_rxcdrhold    (1'b0),
+    .INTF0_TX5_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX5_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX5_ch_txprecursor (6'(TX_PRECURSOR)),
+    .INTF0_RX5_ch_rxcdrhold    (1'b0),
+    .INTF0_TX6_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX6_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX6_ch_txprecursor (6'(TX_PRECURSOR)),
+    .INTF0_RX6_ch_rxcdrhold    (1'b0),
+    .INTF0_TX7_ch_txmaincursor (7'(TX_MAINCURSOR)), .INTF0_TX7_ch_txpostcursor (6'(TX_POSTCURSOR)), .INTF0_TX7_ch_txprecursor (6'(TX_PRECURSOR)),
+    .INTF0_RX7_ch_rxcdrhold    (1'b0),
 
-    .INTF0_TX0_ch_txpolarity   (POLARITY_TX_Q1[0]),
-    .INTF0_TX1_ch_txpolarity   (POLARITY_TX_Q1[1]),
-    .INTF0_TX2_ch_txpolarity   (POLARITY_TX_Q1[2]),
-    .INTF0_TX3_ch_txpolarity   (POLARITY_TX_Q1[3]),
-    .INTF0_RX0_ch_rxpolarity   (POLARITY_RX_Q1[0]),
-    .INTF0_RX1_ch_rxpolarity   (POLARITY_RX_Q1[1]),
-    .INTF0_RX2_ch_rxpolarity   (POLARITY_RX_Q1[2]),
-    .INTF0_RX3_ch_rxpolarity   (POLARITY_RX_Q1[3]),
+    .INTF0_TX0_ch_txpolarity   (POLARITY_TX_Q2[0]),
+    .INTF0_TX1_ch_txpolarity   (POLARITY_TX_Q2[1]),
+    .INTF0_TX2_ch_txpolarity   (POLARITY_TX_Q2[2]),
+    .INTF0_TX3_ch_txpolarity   (POLARITY_TX_Q2[3]),
+    .INTF0_TX4_ch_txpolarity   (POLARITY_TX_Q3[0]),
+    .INTF0_TX5_ch_txpolarity   (POLARITY_TX_Q3[1]),
+    .INTF0_TX6_ch_txpolarity   (POLARITY_TX_Q3[2]),
+    .INTF0_TX7_ch_txpolarity   (POLARITY_TX_Q3[3]),
+    .INTF0_RX0_ch_rxpolarity   (POLARITY_RX_Q2[0]),
+    .INTF0_RX1_ch_rxpolarity   (POLARITY_RX_Q2[1]),
+    .INTF0_RX2_ch_rxpolarity   (POLARITY_RX_Q2[2]),
+    .INTF0_RX3_ch_rxpolarity   (POLARITY_RX_Q2[3]),
+    .INTF0_RX4_ch_rxpolarity   (POLARITY_RX_Q3[0]),
+    .INTF0_RX5_ch_rxpolarity   (POLARITY_RX_Q3[1]),
+    .INTF0_RX6_ch_rxpolarity   (POLARITY_RX_Q3[2]),
+    .INTF0_RX7_ch_rxpolarity   (POLARITY_RX_Q3[3]),
 
     .INTF0_TX0_ch_txrate (8'd0), .INTF0_RX0_ch_rxrate (8'd0),
     .INTF0_TX1_ch_txrate (8'd0), .INTF0_RX1_ch_rxrate (8'd0),
     .INTF0_TX2_ch_txrate (8'd0), .INTF0_RX2_ch_rxrate (8'd0),
     .INTF0_TX3_ch_txrate (8'd0), .INTF0_RX3_ch_rxrate (8'd0),
+    .INTF0_TX4_ch_txrate (8'd0), .INTF0_RX4_ch_rxrate (8'd0),
+    .INTF0_TX5_ch_txrate (8'd0), .INTF0_RX5_ch_rxrate (8'd0),
+    .INTF0_TX6_ch_txrate (8'd0), .INTF0_RX6_ch_rxrate (8'd0),
+    .INTF0_TX7_ch_txrate (8'd0), .INTF0_RX7_ch_rxrate (8'd0),
 
     .INTF0_TX0_ch_txpmaresetdone (), .INTF0_TX0_ch_txprogdivresetdone (),
     .INTF0_RX0_ch_rxpmaresetdone (), .INTF0_RX0_ch_rxprogdivresetdone (),
@@ -998,14 +1126,22 @@ module dcmac_phy #(
     .INTF0_RX2_ch_rxpmaresetdone (), .INTF0_RX2_ch_rxprogdivresetdone (),
     .INTF0_TX3_ch_txpmaresetdone (), .INTF0_TX3_ch_txprogdivresetdone (),
     .INTF0_RX3_ch_rxpmaresetdone (), .INTF0_RX3_ch_rxprogdivresetdone (),
+    .INTF0_TX4_ch_txpmaresetdone (), .INTF0_TX4_ch_txprogdivresetdone (),
+    .INTF0_RX4_ch_rxpmaresetdone (), .INTF0_RX4_ch_rxprogdivresetdone (),
+    .INTF0_TX5_ch_txpmaresetdone (), .INTF0_TX5_ch_txprogdivresetdone (),
+    .INTF0_RX5_ch_rxpmaresetdone (), .INTF0_RX5_ch_rxprogdivresetdone (),
+    .INTF0_TX6_ch_txpmaresetdone (), .INTF0_TX6_ch_txprogdivresetdone (),
+    .INTF0_RX6_ch_rxpmaresetdone (), .INTF0_RX6_ch_rxprogdivresetdone (),
+    .INTF0_TX7_ch_txpmaresetdone (), .INTF0_TX7_ch_txprogdivresetdone (),
+    .INTF0_RX7_ch_rxpmaresetdone (), .INTF0_RX7_ch_rxprogdivresetdone (),
 
     .INTF0_TX_clr_out                 (gt_tx_clr_out[1]),
     .INTF0_TX_clrb_leaf_out           (gt_tx_clrb_leaf_out[1]),
     .INTF0_RX_clr_out                 (gt_rx_clr_out[1]),
     .INTF0_RX_clrb_leaf_out           (gt_rx_clrb_leaf_out[1]),
-    .INTF0_rst_all_in                 (sys_reset | gt_all_reset_stretched[1]),
+    .INTF0_rst_all_in                 (sys_reset),
     .INTF0_rst_tx_pll_and_datapath_in (1'b0),
-    .INTF0_rst_rx_pll_and_datapath_in (rx_pll_dp_reset_stretched[1]),
+    .INTF0_rst_rx_pll_and_datapath_in (1'b0),
     .INTF0_rst_tx_done_out            (rst_tx_done_q[1]),
     .INTF0_rst_rx_done_out            (rst_rx_done_q[1]),
 
@@ -1053,10 +1189,6 @@ module dcmac_phy #(
       end
     end
   end
-
-  // The third and the fourth reference clock pairs belong to the four quad configuration and are
-  // unused here. They are read once so no tool reports a dangling input.
-  wire _unused_refclk23 = |{gt_ref_clk2_p, gt_ref_clk2_n, gt_ref_clk3_p, gt_ref_clk3_n};
 
   assign tx_serdes_reset = tx_serdes_reset_i | {6{core_serdes_reset}};
   assign rx_serdes_reset = rx_serdes_reset_i | {6{core_serdes_reset}};

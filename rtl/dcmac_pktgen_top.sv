@@ -25,6 +25,7 @@ module dcmac_pktgen_top #(
   parameter logic [7:0] DONE_MASK      = dcmac_ctl_pkg::DONEMASK_100G,
   parameter int         RATE_CODE      = dcmac_ctl_pkg::RATE_CODE_100G,
   parameter int         RATE_FIELD     = dcmac_ctl_pkg::RATE_FIELD_100G,
+  parameter bit         LANE_RATE_HI   = 1'b1,
   parameter logic [7:0] POLARITY_TX_Q0 = dcmac_ctl_pkg::QSFP0_TXPOLARITY,
   parameter logic [7:0] POLARITY_RX_Q0 = dcmac_ctl_pkg::QSFP0_RXPOLARITY,
   parameter logic [7:0] POLARITY_TX_Q1 = dcmac_ctl_pkg::QSFP1_TXPOLARITY,
@@ -125,8 +126,6 @@ module dcmac_pktgen_top #(
 
   wire                     fsm_link_up, fsm_tx_rst_seg, rx_pcs_aligned_grp;
   wire                     port_rx_dp_reset, port_core_serdes_reset;
-  wire                     port_rx_pll_dp_reset;
-  wire                     port_gt_all_reset;
   wire                     port_rx_serdes_reset;
   wire                     port_rx_flush;
   wire                     gt_rx_done_seg;
@@ -209,6 +208,7 @@ module dcmac_pktgen_top #(
     .ALIGN_EXPORT_MODE (1),
     .RATE_CODE       (RATE_CODE),
     .RATE_FIELD      (RATE_FIELD),
+    .LANE_RATE_HI    (LANE_RATE_HI),
     .DONE_MASK       (DONE_MASK)
   ) u_ctl (
     .aclk                    (usr_clk_i),
@@ -228,8 +228,6 @@ module dcmac_pktgen_top #(
     .ctl_tx_send_lfi             (ctl_tx_send_lfi),
     .ctl_tx_send_rfi             (ctl_tx_send_rfi),
     .fsm_rx_datapath_reset       (port_rx_dp_reset),
-    .fsm_rx_pll_datapath_reset   (port_rx_pll_dp_reset),
-    .fsm_gt_all_reset            (port_gt_all_reset),
     .fsm_rx_serdes_reset         (port_rx_serdes_reset),
     .fsm_rx_flush                (port_rx_flush),
     .fsm_gt_rx_done              (gt_rx_done_seg),
@@ -405,8 +403,6 @@ module dcmac_pktgen_top #(
     .ctl_tx_send_rfi         (ctl_tx_send_rfi),
 
     .rx_datapath_reset       (phy_rx_dp_reset),
-    .rx_pll_datapath_reset   (port_rx_pll_dp_reset),
-    .gt_all_reset            (port_gt_all_reset),
     .rx_serdes_reset_req     (port_rx_serdes_reset),
     .rx_flush_req            (port_rx_flush),
     .rx_datapath_reset_ports (phy_rx_dp_ports),
@@ -434,6 +430,7 @@ module dcmac_pktgen_top #(
     .s_axil_rready           (seq_rready),
 
     .gt_tx_reset_done        (gt_tx_reset_done_raw),
+    .gt_ch_reset_done        (),
     .gt_rx_reset_done        (gt_rx_reset_done_raw),
     .core_serdes_reset       (port_core_serdes_reset)
   );

@@ -39,24 +39,17 @@ wiring: 100 takes 1, 400 takes 4, and 200 takes 2 or 4."
   exit 2
 }
 
-# CAUTION: 200GAUI-4 is out of scope for this release. This release covers 112G PAM4 a lane only,
-# which is 100GAUI-1, 200GAUI-2 and 400GAUI-4, all running 106.25 Gb/s a lane. A 200GAUI-4 cage
-# needs four lanes at 53.125 and the wizards carried here are preset at 106.25, so the link it
-# builds is misconfigured; plan Section 11.32.9 records this and marks axis200g4_391,
-# axis200g4v2_391 and amd200g4v2_391 as not for use. The source is kept so the work is not lost
-# and so the elaboration gates still cover it, and this refusal is what keeps it out of every
-# image. Lifting the refusal requires the wizard preset corrected and a fresh measurement.
-if {$rate == 200 && $gaui == 4} {
-  puts "IMAGE FAIL: NIA_RATE=200 with NIA_GAUI=4 selects 200GAUI-4, which is out of scope for this\
-release. This release covers 112G PAM4 a lane only. Build 200G as 200GAUI-2 by leaving NIA_GAUI\
-unset. See plan Section 11.32.9."
-  exit 2
-}
+# 200GAUI-4 builds four lanes of 53.125 Gb/s a cage over two GTM quads a cage, four quads in the
+# image. The wizard pair of ip/rate200g4 carries the 53.125 settings, measured as
+# INTERNAL_PRESET PAM4_Ethernet_53G with TX_LINE_RATE 53.125 and user data width 160, and the pair
+# it replaced carried 106.25 under a 53G label, which is the defect that kept this rate out of the
+# release. rtl/rate/dcmac_phy_wrapper_200g4.sv connects the four wired lanes of each cage, which
+# are CH0 and CH2 of each quad. IMPORTANT: no link has been measured at this rate.
 set gaui4_200g [expr {$rate == 200 && $gaui == 4}]
-# A cage occupies the serial pins of every quad that serves it, four a quad. Every
-# configuration this image builds is one quad a cage, including 200GAUI-4, so the count is 8
-# across the two cages. GAUI selects the transceiver preset and not the pin count.
-set gt_lanes 8
+# A cage occupies the serial pins of every quad that serves it, four a quad. One quad a cage is
+# 8 serial pins across the two cages, and 200GAUI-4 takes two quads a cage because its four
+# lanes at 53.125 Gb/s are CH0 and CH2 of each quad on this board, so it is 16.
+set gt_lanes [expr {$gaui4_200g ? 16 : 8}]
 puts "IMAGE GAUI $gaui"
 puts "IMAGE GT_LANES $gt_lanes"
 
@@ -82,7 +75,7 @@ switch -- $rate {
     set phys_name     tu03_pktgen_post_synth.tcl
   }
   200 {
-    set rate_phy_section PHY_RATE200
+    set rate_phy_section [expr {$gaui4_200g ? "PHY_RATE200G4" : "PHY_RATE200"}]
     set rate_top      tu03_pktgen_dual200_top
     set rate_top_file tu03_pktgen_dual200_top.sv
     if {$pktgen eq "axis"} {
@@ -90,7 +83,8 @@ switch -- $rate {
       set rate_top_file tu03_axispg_dual_top.sv
     }
     set xdc_name      tu03_pktgen_dual_timing.xdc
-    set phys_name     tu03_pktgen_post_synth.tcl
+    set phys_name     [expr {$gaui4_200g ? "tu03_pktgen_200g4_post_synth.tcl" \
+                                         : "tu03_pktgen_post_synth.tcl"}]
   }
   400 {
     set rate_phy_section PHY_RATE400

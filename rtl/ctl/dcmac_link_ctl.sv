@@ -21,6 +21,7 @@ module dcmac_link_ctl
 
   parameter int          RATE_CODE   = RATE_CODE_100G,
   parameter int          RATE_FIELD  = RATE_FIELD_100G,
+  parameter bit          LANE_RATE_HI = 1'b1,
   parameter int          ANCHOR      = 0,
   parameter int          N_GROUP     = 1,
   parameter int          ANCHOR_1    = 1,
@@ -65,8 +66,6 @@ module dcmac_link_ctl
   output wire [N_GROUP-1:0]         ctl_tx_send_lfi,
   output wire [N_GROUP-1:0]         ctl_tx_send_rfi,
   output wire [N_GROUP-1:0]         fsm_rx_datapath_reset,
-  output wire [N_GROUP-1:0]         fsm_rx_pll_datapath_reset,
-  output wire [N_GROUP-1:0]         fsm_gt_all_reset,
   output wire [N_GROUP-1:0]         fsm_rx_serdes_reset,
   output wire [N_GROUP-1:0]         fsm_rx_flush,
   input  wire [N_GROUP-1:0]         fsm_gt_rx_done,
@@ -155,41 +154,6 @@ module dcmac_link_ctl
   wire [NG-1:0] seq_link_up;
   wire          seq_bringup_done;
 
-  wire [NG-1:0] gt_all_reset_a;
-  dcmac_sync2 #(.WIDTH(NG), .STAGES(2), .INIT('0)) u_sync_gt_all (
-    .clk  (aclk),
-    .din  (fsm_gt_all_reset),
-    .dout (gt_all_reset_a));
-
-  localparam int ESC_RESTART_CYC = 50 * CYC_PER_MS;
-  localparam int ERW = $clog2(ESC_RESTART_CYC + 1);
-
-  logic              esc_seen_r;
-  logic [ERW-1:0]    esc_cnt_r;
-  logic              esc_restart_r;
-  always_ff @(posedge aclk) begin
-    if (!aresetn) begin
-      esc_seen_r    <= 1'b0;
-      esc_cnt_r     <= '0;
-      esc_restart_r <= 1'b0;
-    end else begin
-      esc_restart_r <= 1'b0;
-      if (!esc_seen_r) begin
-        if (|gt_all_reset_a) begin
-          esc_seen_r <= 1'b1;
-          esc_cnt_r  <= ERW'(ESC_RESTART_CYC);
-        end
-      end else if (esc_cnt_r != '0) begin
-        esc_cnt_r <= esc_cnt_r - 1'b1;
-      end else begin
-        esc_restart_r <= 1'b1;
-        esc_seen_r    <= 1'b0;
-      end
-    end
-  end
-
-  wire          restart_any = bringup_restart_req | esc_restart_r;
-
   dcmac_ctl_seq #(
     .PORT_MAX       (PORT_MAX),
     .NPORTS         (NPORTS),
@@ -204,6 +168,7 @@ module dcmac_link_ctl
     .DONE_MASK      (DONE_MASK),
     .RATE_CODE      (RATE_CODE),
     .RATE_FIELD     (RATE_FIELD),
+    .LANE_RATE_HI   (LANE_RATE_HI),
     .LINK_CONFIRM_N (LINK_CONFIRM_N_BRINGUP)
   ) u_seq (
     .aclk                    (aclk),
@@ -231,7 +196,7 @@ module dcmac_link_ctl
     .rx_datapath_reset_ports (rx_datapath_reset_ports),
     .core_serdes_reset       (core_serdes_reset),
     .tx_datapath_reset       (tx_datapath_reset),
-    .bringup_restart_req     (restart_any),
+    .bringup_restart_req     (bringup_restart_req),
     .stats_req               (stats_req),
     .rx_force_resync_req     (rx_force_resync_req),
     .rx_datapath_reset_req   (rx_datapath_reset_req),
@@ -538,8 +503,6 @@ module dcmac_link_ctl
         .ctl_tx_send_lfi         (ctl_tx_send_lfi[g]),
         .ctl_tx_send_rfi         (ctl_tx_send_rfi[g]),
         .rx_datapath_reset       (fsm_rx_datapath_reset[g]),
-        .rx_pll_datapath_reset   (fsm_rx_pll_datapath_reset[g]),
-        .gt_all_reset_req        (fsm_gt_all_reset[g]),
         .rx_serdes_reset_req     (fsm_rx_serdes_reset[g]),
         .rx_flush_req            (fsm_rx_flush[g]),
         .gt_rx_done              (fsm_gt_rx_done[g]),

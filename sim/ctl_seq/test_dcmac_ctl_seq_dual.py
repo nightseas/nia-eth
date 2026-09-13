@@ -36,6 +36,7 @@ CYC_PER_MS = int(os.environ.get("CYC_PER_MS", "20"))
 POLL_TRIES = int(os.environ.get("POLL_TRIES", "3"))
 RATE_CODE = int(os.environ.get("RATE_CODE", "0"))
 RATE_FIELD = int(os.environ.get("RATE_FIELD", "4"))
+LANE_RATE_HI = int(os.environ.get("LANE_RATE_HI", "1")) != 0
 DONE_MASK = int(os.environ.get("DONE_MASK", "3"))
 CLK_NS = 4
 
@@ -140,7 +141,7 @@ async def test_ns20_golden_trace_two_groups(dut):
     assert await _wait_settle(dut), "the sequencer never halted within the cycle budget"
     got = [x.as_tuple() for x in bfm.writes()]
     exp = GD.config_phase_dual(anchors=ANCHORS, nports=NPORTS_L,
-                               rate=RATE_CODE, field=RATE_FIELD)
+                               rate=RATE_CODE, field=RATE_FIELD, lane_hi=LANE_RATE_HI)
 
     d = os.environ.get("TRACE_DIR", ".")
     tag = f"ng{N_GROUP}_a{'_'.join(str(a) for a in ANCHORS)}_np{NPORTS}"
@@ -225,7 +226,7 @@ async def test_ns20_every_per_port_write_both_slots(dut):
                          "\n  ".join(missing))
 
     for gi, a in enumerate(ANCHORS):
-        wtx, wrx = G._mode_words(RATE_CODE, RATE_FIELD)
+        wtx, wrx = G._mode_words(RATE_CODE, RATE_FIELD, LANE_RATE_HI)
         assert (G.pp(a, G.O_TX_MODE), wtx) in seen, \
             f" VIOLATED: group {gi} anchor {a} never got the TX rate word {wtx:#010x}"
         assert (G.pp(a, G.O_RX_MODE), wrx) in seen, \
@@ -255,7 +256,7 @@ async def test_ns20_millisecond_waits_intact(dut):
     assert await _wait_settle(dut)
     writes = bfm.writes()
     exp = GD.config_phase_dual(anchors=ANCHORS, nports=NPORTS_L, rate=RATE_CODE,
-                               field=RATE_FIELD, with_waits=True)
+                               field=RATE_FIELD, with_waits=True, lane_hi=LANE_RATE_HI)
     points = GD.wait_points(exp)
     assert points, "the golden emitted no WAIT tokens - with_waits=True produced nothing"
 

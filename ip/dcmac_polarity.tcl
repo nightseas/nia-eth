@@ -138,18 +138,19 @@ set ::nia_pol_rtl [file normalize [file join [file dirname [info script]] .. rtl
 # the Vivado example design for 200GAUI-4 carries INTF0_NO_OF_LANES 4 with NO_OF_QUADS 1. The
 # key is formed by nia_dp_pol_config_key from NIA_RATE and NIA_GAUI.
 array set ::nia_dp_pol_rate_wiz  {100 2 200 2 200g4 2 400 1}
-array set ::nia_dp_pol_rate_lane {100 2 200 4 200g4 4 400 8}
+array set ::nia_dp_pol_rate_lane {100 2 200 4 200g4 8 400 8}
 array set ::nia_dp_pol_rate_phy  {100 dcmac_phy_wrapper.sv
                                   200 rate/dcmac_phy_wrapper_200g.sv
-                                  200g4 rate/dcmac_phy_wrapper_200g.sv
+                                  200g4 rate/dcmac_phy_wrapper_200g4.sv
                                   400 rate/dcmac_phy_wrapper_400g.sv}
-array set ::nia_dp_pol_rate_bank {100 {202 204} 200 {202 204} 200g4 {202 204}
+array set ::nia_dp_pol_rate_bank {100 {202 204} 200 {202 204}
+                                  200g4 {202 203 204 205}
                                   400 {202 203}}
 # The keys whose PHY takes its polarity defaults from dcmac_ctl_pkg::QSFP0_* and QSFP1_*,
 # which describe bank 202 and bank 204. A key that reaches bank 203 or bank 205 carries its
 # own literals from nia_dp_pol_tx and nia_dp_pol_rx instead, because the QSFP1 rows describe
 # bank 204 alone and their receive halves differ from bank 203 and bank 205.
-array set ::nia_dp_pol_rate_pkgdefault {100 1 200 1 200g4 1 400 0}
+array set ::nia_dp_pol_rate_pkgdefault {100 1 200 1 200g4 0 400 0}
 
 array set ::nia_dp_gaui_default {100 1 200 2 400 4}
 

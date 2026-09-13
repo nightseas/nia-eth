@@ -39,7 +39,10 @@ set_property ip_output_repo [file join $nia_g4_work repo] [current_project]
 
 set nia_g4_report {GT_TYPE NO_OF_QUADS INTF0_NO_OF_LANES INTF0_PRESET INTF0_GT_SETTINGS
                    INTF0_OPTIONAL_PORTS INTF0_LANE_MAP QUAD0_PROT0_LANES QUAD1_PROT0_LANES
-                   QUAD0_REFCLK_STRING QUAD1_REFCLK_STRING}
+                   QUAD0_REFCLK_STRING QUAD1_REFCLK_STRING
+                   QUAD0_PROT0_RX0_EN QUAD0_PROT0_RX1_EN QUAD0_PROT0_RX2_EN QUAD0_PROT0_RX3_EN
+                   QUAD1_PROT0_RX0_EN QUAD1_PROT0_RX1_EN QUAD1_PROT0_RX2_EN QUAD1_PROT0_RX3_EN
+                   INTF0_CHANNEL_MAP INTF_QUAD_CHANNEL_MAP}
 
 foreach nia_g4_name {dcmac_0_gtwiz_versal_0 dcmac_0_gtwiz_versal_1} {
     set nia_g4_stage [file join $nia_g4_work stage_$nia_g4_name]
@@ -67,6 +70,58 @@ foreach nia_g4_name {dcmac_0_gtwiz_versal_0 dcmac_0_gtwiz_versal_1} {
         puts "GTWIZ200G4 FAIL preset $nia_g4_name: $nia_g4_err"
         exit 2
     }
+    # The preset rewrites the whole per rate settings block, and AMD's GTM-PAM4_Ethernet_53G
+    # preset carries a 161.1328125 MHz reference clock. This board carries 156.25 MHz on
+    # REFCLK0 of banks 202, 203, 204 and 205, from CLK_BUF1, so the frequency is put back after
+    # the preset is applied. A wizard left at 161.1328125 divides that clock for a rate it is not
+    # given: the LCPLL then runs 156.25 / 161.1328125 of the asked rate, which is 51.5152 Gb/s a
+    # lane instead of 53.125 and 193.94 Gb/s a port instead of 200. Both ends of a loopback share
+    # the error, so the link still passes traffic and reads 97 percent of line.
+    set nia_g4_refclk 156.25
+    set nia_g4_lr "<unreadable>"
+    catch { set nia_g4_lr [get_property CONFIG.INTF0_LR0_SETTINGS $nia_g4_ip] }
+    puts "GTWIZ200G4 $nia_g4_name refclk before ="
+    foreach nia_g4_f {TX_REFCLK_FREQUENCY RX_REFCLK_FREQUENCY
+                      TX_ACTUAL_REFCLK_FREQUENCY RX_ACTUAL_REFCLK_FREQUENCY} {
+        set nia_g4_v "<absent>"
+        regexp "(^|\\s)$nia_g4_f\\s+(\\S+)" $nia_g4_lr -> _ nia_g4_v
+        puts "GTWIZ200G4 $nia_g4_name   $nia_g4_f = $nia_g4_v"
+    }
+    set nia_g4_new $nia_g4_lr
+    foreach nia_g4_f {TX_REFCLK_FREQUENCY RX_REFCLK_FREQUENCY} {
+        regsub -all "(^|\\s)$nia_g4_f\\s+\\S+" $nia_g4_new " $nia_g4_f $nia_g4_refclk" nia_g4_new
+    }
+    foreach nia_g4_f {TX_ACTUAL_REFCLK_FREQUENCY RX_ACTUAL_REFCLK_FREQUENCY} {
+        regsub -all "(^|\\s)$nia_g4_f\\s+\\S+" $nia_g4_new \
+               " $nia_g4_f 156.250000000000" nia_g4_new
+    }
+    if {[catch {set_property CONFIG.INTF0_LR0_SETTINGS [list $nia_g4_new] $nia_g4_ip} nia_g4_err]} {
+        puts "GTWIZ200G4 FAIL refclk $nia_g4_name: $nia_g4_err"
+        exit 2
+    }
+    set nia_g4_lr "<unreadable>"
+    catch { set nia_g4_lr [get_property CONFIG.INTF0_LR0_SETTINGS $nia_g4_ip] }
+    foreach nia_g4_f {TX_REFCLK_FREQUENCY RX_REFCLK_FREQUENCY
+                      TX_ACTUAL_REFCLK_FREQUENCY RX_ACTUAL_REFCLK_FREQUENCY
+                      TX_LINE_RATE RX_LINE_RATE} {
+        set nia_g4_v "<absent>"
+        regexp "(^|\\s)$nia_g4_f\\s+(\\S+)" $nia_g4_lr -> _ nia_g4_v
+        puts "GTWIZ200G4 $nia_g4_name after $nia_g4_f = $nia_g4_v"
+        if {$nia_g4_f eq "TX_REFCLK_FREQUENCY" || $nia_g4_f eq "RX_REFCLK_FREQUENCY"} {
+            if {$nia_g4_v ne $nia_g4_refclk} {
+                puts "GTWIZ200G4 FAIL $nia_g4_name $nia_g4_f = $nia_g4_v, not $nia_g4_refclk"
+                exit 2
+            }
+        }
+    }
+    # The unrouted channels of each quad cannot be disabled. This board routes two channels of a
+    # quad to its cage, so CH1 and CH3 carry no signal, and disabling them was tried on 2026-09-13:
+    # the wizard refuses it with IP_Flow 19-3478, "In Half density configuration, channels of a same
+    # dual must be connected to same parent IP. Channel-0 and channel-1 TX Channels should be
+    # connected to same parent IP." CH0 with CH1 and CH2 with CH3 form the two duals of a quad, so a
+    # used channel carries its dual partner into the interface. Every rate of this repository
+    # therefore configures four channels a quad and drives two, and the enable keys are reported
+    # below rather than changed.
     # The polarity ports are deliberately left as the seed carries them, which is without
     # ch_txpolarity and ch_rxpolarity. nia_dp_pol_enable_ports adds them and regenerates the
     # output products, and the polarity preflight then reads the port names out of those

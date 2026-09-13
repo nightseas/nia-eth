@@ -38,15 +38,18 @@ PORT_MAX = 6
 def pp(p, off, base=0):
     return base + off + ((p + 1) << 12)
 
-def _mode_words(rate, field):
-    wtx = (rate & 0x3) | (1 << 4) | (1 << 10)
-    wrx = (rate & 0x3) | (1 << 11) | (1 << 13)
+def _mode_words(rate, field, lane_hi=True):
+    # The lane rate class is one bit a direction: bit 10 and bit 13 above 56 Gb/s a lane,
+    # bit 9 and bit 12 at or below it, per dcmac_ctl_pkg.sv and the three generated
+    # configurations of refcode/dcmac_exdes it is read from.
+    wtx = (rate & 0x3) | (1 << 4) | (1 << (10 if lane_hi else 9))
+    wrx = (rate & 0x3) | (1 << 11) | (1 << (13 if lane_hi else 12))
     wtx = (wtx & 0xFFE0FFFF) | (field << 16)
     wrx = (wrx & 0xFFE0FFFF) | (field << 16)
     return wtx, wrx
 
 def config_phase(nports=1, anchor=0, rate=0, field=0x04, base=0,
-                 nonanchor_field=0x04):
+                 nonanchor_field=0x04, lane_hi=True):
     g = lambda off: base + off
     P = lambda p, off: pp(p, off, base)
     group = list(range(anchor, anchor + nports))
@@ -73,7 +76,7 @@ def config_phase(nports=1, anchor=0, rate=0, field=0x04, base=0,
     for p in range(PORT_MAX):
         r = rate if p == anchor else 0
         f = field if p == anchor else nonanchor_field
-        wtx, wrx = _mode_words(r, f)
+        wtx, wrx = _mode_words(r, f, lane_hi)
         t.append(("W", P(p, O_TX_MODE), wtx))
         t.append(("W", P(p, O_RX_MODE), wrx))
 

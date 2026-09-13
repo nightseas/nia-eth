@@ -25,6 +25,7 @@ ANCHOR = int(os.environ.get("ANCHOR", "0"))
 CYC_PER_MS = int(os.environ.get("CYC_PER_MS", "20"))
 RATE_CODE = int(os.environ.get("RATE_CODE", "0"))
 RATE_FIELD = int(os.environ.get("RATE_FIELD", "4"))
+LANE_RATE_HI = int(os.environ.get("LANE_RATE_HI", "1")) != 0
 DONE_MASK = int(os.environ.get("DONE_MASK", "3"))
 
 CLK_NS = 4
@@ -99,7 +100,8 @@ async def test_tc_golden_write_trace_unchanged(dut):
     bfm = await _start(dut)
     await _wait_halt(dut)
     got = [x.as_tuple() for x in bfm.writes()]
-    want = G.config_phase(nports=NPORTS, anchor=ANCHOR, rate=RATE_CODE, field=RATE_FIELD)
+    want = G.config_phase(nports=NPORTS, anchor=ANCHOR, rate=RATE_CODE, field=RATE_FIELD,
+                          lane_hi=LANE_RATE_HI)
     n = len(want)
     assert len(got) >= n, (
         f"the sequencer issued {len(got)} writes, fewer than the golden config phase's {n}.  "

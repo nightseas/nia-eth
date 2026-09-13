@@ -92,15 +92,34 @@ module fpga_axispg_dual_top #(
   localparam int RATE_FIELD = (RATE == 400) ? dcmac_ctl_pkg::RATE_FIELD_400G
                             : ((RATE == 200) ? dcmac_ctl_pkg::RATE_FIELD_200G
                                              : dcmac_ctl_pkg::RATE_FIELD_100G);
-  localparam logic [7:0] POLARITY_TX_Q0 = (RATE == 100) ? dcmac_ctl_pkg::QSFP0_TXPOLARITY : 8'b0000_1100;
-  localparam logic [7:0] POLARITY_RX_Q0 = (RATE == 100) ? dcmac_ctl_pkg::QSFP0_RXPOLARITY : 8'b0000_0000;
-  localparam logic [7:0] POLARITY_TX_Q1 = (RATE == 100) ? dcmac_ctl_pkg::QSFP1_TXPOLARITY : 8'b0000_0011;
-  localparam logic [7:0] POLARITY_RX_Q1 = (RATE == 400) ? 8'b0000_1111
-                            : ((RATE == 200) ? 8'b0000_0011 : dcmac_ctl_pkg::QSFP1_RXPOLARITY);
-  localparam logic [7:0] POLARITY_TX_Q2 = 8'b0000_0000;
-  localparam logic [7:0] POLARITY_RX_Q2 = 8'b0000_0000;
-  localparam logic [7:0] POLARITY_TX_Q3 = 8'b0000_0000;
-  localparam logic [7:0] POLARITY_RX_Q3 = 8'b0000_0000;
+  // The port mode words carry the lane rate class, and RATE divided by GAUI is the lane rate in
+  // Gb/s: 100 at 100GAUI-1, 200GAUI-2 and 400GAUI-4, and 50 at 200GAUI-4. The three shipping
+  // rates take the high class and 200GAUI-4 takes the low one. Section 11.37.23 of the
+  // development plan carries the measurement that establishes it.
+  localparam bit LANE_RATE_HI = dcmac_ctl_pkg::lane_rate_hi(RATE, GAUI);
+  // A polarity vector is one bit a transceiver channel, channel 0 in bit 0. One quad a cage
+  // uses bits 3:0, and 200GAUI-4 uses two quads a cage, so it fills bits 7:4 with the second
+  // quad: bank 203 for QSFP0 and bank 205 for QSFP1. The values are ip/dcmac_polarity.tcl.
+  localparam bit GAUI4_200G = (RATE == 200) && (GAUI == 4);
+
+  // A vector is one GTM bank, channel 0 in bit 0. One quad a cage uses Q0 for bank 202 and Q1
+  // for bank 204, which is what 100GAUI-1, 200GAUI-2 and 400GAUI-4 do, where 400GAUI-4 takes
+  // Q1 as bank 203 because its one client spans two quads. 200GAUI-4 takes two quads a cage,
+  // so it fills all four: Q0 is 202, Q1 is 203, Q2 is 204 and Q3 is 205. The values are
+  // ip/dcmac_polarity.tcl, read as channel 0 first.
+  localparam logic [7:0] POLARITY_TX_Q0 = (RATE == 100) ? dcmac_ctl_pkg::QSFP0_TXPOLARITY
+                                                        : 8'b0000_1100;
+  localparam logic [7:0] POLARITY_RX_Q0 = (RATE == 100) ? dcmac_ctl_pkg::QSFP0_RXPOLARITY
+                                                        : 8'b0000_0000;
+  localparam logic [7:0] POLARITY_TX_Q1 = GAUI4_200G ? 8'b0000_0011
+                            : ((RATE == 100) ? dcmac_ctl_pkg::QSFP1_TXPOLARITY : 8'b0000_0011);
+  localparam logic [7:0] POLARITY_RX_Q1 = GAUI4_200G ? 8'b0000_1111
+                            : ((RATE == 400) ? 8'b0000_1111
+                            : ((RATE == 200) ? 8'b0000_0011 : dcmac_ctl_pkg::QSFP1_RXPOLARITY));
+  localparam logic [7:0] POLARITY_TX_Q2 = GAUI4_200G ? 8'b0000_0011 : 8'b0000_0000;
+  localparam logic [7:0] POLARITY_RX_Q2 = GAUI4_200G ? 8'b0000_0011 : 8'b0000_0000;
+  localparam logic [7:0] POLARITY_TX_Q3 = GAUI4_200G ? 8'b0000_0011 : 8'b0000_0000;
+  localparam logic [7:0] POLARITY_RX_Q3 = GAUI4_200G ? 8'b0000_1111 : 8'b0000_0000;
   localparam int BLOCK    = HOST_ADDR_W - PG_AW;
   localparam logic [BLOCK-1:0] BLOCK_PKTGEN_0 = 'h0;
   localparam logic [BLOCK-1:0] BLOCK_COMMAND  = 'h1;
@@ -148,6 +167,7 @@ module fpga_axispg_dual_top #(
 
   wire [1:0]  ctl_rx_pcs_aligned;
   wire [31:0] ctl_rx_phy_status;
+  wire [16*N_CLIENT-1:0] ctl_gt_ch_reset_done;
   wire [31:0] ctl_stat_rd_data;
   wire [7:0]  ctl_retry_cnt;
   wire [4:0]  ctl_seq_state;
@@ -277,6 +297,9 @@ module fpga_axispg_dual_top #(
           6'h0D: cmd_rdata_r <= {28'd0, ctl_rx_status, ctl_tx_status};
           6'h0E: cmd_rdata_r <= sad_rx_align_stat[31:0];
           6'h0F: cmd_rdata_r <= sad_rx_align_stat[63:32];
+          6'h10: cmd_rdata_r <= {16'd0, ctl_gt_ch_reset_done[15:0]};
+          6'h11: cmd_rdata_r <= (N_CLIENT > 1) ? {16'd0, ctl_gt_ch_reset_done[16*((N_CLIENT > 1) ? 1 : 0) +: 16]}
+                                               : 32'd0;
           default: cmd_rdata_r <= 32'd0;
         endcase
       end else if (cmd_rvalid_r && s_axil_rready) begin
@@ -381,6 +404,7 @@ module fpga_axispg_dual_top #(
     .DONE_MASK     (DONE_MASK),
     .RATE_CODE     (RATE_CODE),
     .RATE_FIELD    (RATE_FIELD),
+    .LANE_RATE_HI  (LANE_RATE_HI),
     .POLARITY_TX_Q0(POLARITY_TX_Q0),
     .POLARITY_RX_Q0(POLARITY_RX_Q0),
     .POLARITY_TX_Q1(POLARITY_TX_Q1),
@@ -449,6 +473,7 @@ module fpga_axispg_dual_top #(
     .ctl_access_fault          (ctl_access_fault),
     .ctl_seq_busy              (ctl_seq_busy),
     .ctl_rx_phy_status         (ctl_rx_phy_status),
+    .ctl_gt_ch_reset_done      (ctl_gt_ch_reset_done),
     .ctl_retry_cnt             (ctl_retry_cnt),
     .ctl_seq_state             (ctl_seq_state),
     .ctl_seq_pc                (ctl_seq_pc),

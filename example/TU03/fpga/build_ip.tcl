@@ -35,15 +35,9 @@ The electrical lane count is fixed by the port pattern and the cage wiring: 100 
 and 200 takes 2 or 4."
   exit 2
 }
-# CAUTION: 200GAUI-4 is out of scope for this release, which covers 112G PAM4 a lane only:
-# 100GAUI-1, 200GAUI-2 and 400GAUI-4 all run 106.25 Gb/s a lane. A 200GAUI-4 cage needs four
-# lanes at 53.125 and its wizards here are preset at 106.25, so the pair it generates is
-# misconfigured. The source is kept for later work and this refusal keeps it out of every build.
-if {$rate == 200 && $gaui == 4} {
-  puts "IP FAIL: NIA_RATE=200 with NIA_GAUI=4 selects 200GAUI-4, which is out of scope for this\
-release. This release covers 112G PAM4 a lane only. Leave NIA_GAUI unset to generate 200GAUI-2."
-  exit 2
-}
+# 200GAUI-4 generates the wizard pair of ip/rate200g4, two quads and eight lanes each at the
+# 53.125 Gb/s preset, one wizard a cage. The pair is a generated product harvested from the IP
+# and checked in, and dcmac_ip_rate.tcl verifies its lane rate rather than only its preset name.
 set rate_key [expr {($rate == 200 && $gaui == 4) ? "200g4" : $rate}]
 if {$rate != 100} {
   source [file join $nia_root ip dcmac_ip_rate.tcl]

@@ -53,6 +53,16 @@ module dcmac_phy #(
   input  wire                              gt_ref_clk0_n,
   input  wire                              gt_ref_clk1_p,
   input  wire                              gt_ref_clk1_n,
+  // The third and the fourth reference clock pairs, which the four quad 200GAUI-4 configuration
+  // uses for the second quad of each cage: PG369 page 201 states that each quad uses its own
+  // gt_ref_clk, and this board drives REFCLK0 of banks 202, 203, 204 and 205 from one 156.25 MHz
+  // buffer, `refcode/iBERT/ibert_loopback_test_config.md` line 598. Every other configuration
+  // leaves them unused, and every PHY implementation carries them because choosing between the
+  // implementations is a file list swap.
+  input  wire                              gt_ref_clk2_p,
+  input  wire                              gt_ref_clk2_n,
+  input  wire                              gt_ref_clk3_p,
+  input  wire                              gt_ref_clk3_n,
 
   input  wire [GT_LANES-1:0]             gt_rxp_in,
   input  wire [GT_LANES-1:0]             gt_rxn_in,
@@ -120,6 +130,7 @@ module dcmac_phy #(
 
   output wire [8*N_CLIENT-1:0]             gt_tx_reset_done,
   output wire [8*N_CLIENT-1:0]             gt_rx_reset_done,
+  output wire [16*N_CLIENT-1:0]            gt_ch_reset_done,
 
   input  wire                              core_serdes_reset
 );
@@ -244,6 +255,8 @@ module dcmac_phy #(
     assign gt_rx_reset_done[8*q +: 8] = {6'd0, {2{rst_rx_done_q[q]}}};
   end
   endgenerate
+
+  assign gt_ch_reset_done = '0;
 
   wire gt_rx_all_done = &rst_rx_done_q;
   wire gt_tx_all_done = &rst_tx_done_q;
@@ -1112,6 +1125,10 @@ module dcmac_phy #(
       end
     end
   end
+
+  // The third and the fourth reference clock pairs belong to the four quad configuration and are
+  // unused here. They are read once so no tool reports a dangling input.
+  wire _unused_refclk23 = |{gt_ref_clk2_p, gt_ref_clk2_n, gt_ref_clk3_p, gt_ref_clk3_n};
 
   assign tx_serdes_reset = tx_serdes_reset_i | {6{core_serdes_reset}};
   assign rx_serdes_reset = rx_serdes_reset_i | {6{core_serdes_reset}};

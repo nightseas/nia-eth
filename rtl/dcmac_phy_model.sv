@@ -90,8 +90,6 @@ module dcmac_phy #(
   input  wire [N_CLIENT-1:0]               ctl_tx_send_rfi,
 
   input  wire [N_CLIENT-1:0]               rx_datapath_reset,
-  input  wire [N_CLIENT-1:0]               rx_pll_datapath_reset,
-  input  wire [N_CLIENT-1:0]               gt_all_reset,
   input  wire [N_CLIENT-1:0]               rx_serdes_reset_req,
   input  wire [N_CLIENT-1:0]               rx_flush_req,
   input  wire [N_CLIENT*PORT_MAX-1:0]      rx_datapath_reset_ports,
@@ -119,6 +117,7 @@ module dcmac_phy #(
 
   output wire [8*N_CLIENT-1:0]             gt_tx_reset_done,
   output wire [8*N_CLIENT-1:0]             gt_rx_reset_done,
+  output wire [16*N_CLIENT-1:0]            gt_ch_reset_done,
 
   input  wire                              core_serdes_reset
 );
@@ -210,6 +209,8 @@ module dcmac_phy #(
   end
 
   genvar gd;
+  assign gt_ch_reset_done = '0;
+
   generate
   for (gd = 0; gd < N_CLIENT; gd++) begin : g_gt_done
     assign gt_rx_reset_done[8*gd +: 8] = (gt_done_r && !rx_dp_d[gd]) ? 8'h03 : 8'h00;
@@ -233,8 +234,7 @@ if (LOOPBACK_MODE == 3'b000) begin : g_tieoff
   assign tx_seg_ready = {N_CLIENT{1'b0}};
   wire _unused_lb = |{tx_seg_valid, tx_seg_dat, tx_seg_ena, tx_seg_sop, tx_seg_eop,
                       tx_seg_err, tx_seg_mty, ctl_rx_enable, ctl_tx_enable,
-                      rx_datapath_reset, rx_datapath_reset_ports, rx_flush_req,
-                      rx_pll_datapath_reset, gt_all_reset};
+                      rx_datapath_reset, rx_datapath_reset_ports, rx_flush_req};
 end else begin : g_loopback
 
   wire [N_CLIENT-1:0] rx_kill_v;

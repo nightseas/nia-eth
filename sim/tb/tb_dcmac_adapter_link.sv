@@ -150,8 +150,6 @@ module tb_dcmac_adapter_link #(
     .ctl_tx_send_lfi         (ctl_tx_send_lfi),
     .ctl_tx_send_rfi         (ctl_tx_send_rfi),
     .rx_datapath_reset       (rx_datapath_reset),
-    .rx_pll_datapath_reset   (),
-    .gt_all_reset_req        (),
     .rx_serdes_reset_req     (),
     .rx_flush_req            (),
     .gt_rx_done              (1'b1),

@@ -53,6 +53,10 @@ dcmac_phy_wrapper.sv
 rst_sync.sv
 rate/dcmac_phy_wrapper_200g.sv
 
+[PHY_RATE200G4]
+rst_sync.sv
+rate/dcmac_phy_wrapper_200g4.sv
+
 [PHY_RATE400]
 rst_sync.sv
 rate/dcmac_phy_wrapper_400g.sv

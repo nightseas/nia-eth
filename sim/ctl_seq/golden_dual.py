@@ -41,7 +41,8 @@ def group_ports(anchors, nports):
     return ports
 
 def config_phase_dual(anchors=(0, 1), nports=(1, 1), rate=0, field=0x04, base=0,
-                      nonanchor_field=0x04, with_waits=False, order=None):
+                      nonanchor_field=0x04, with_waits=False, order=None,
+                      lane_hi=True):
     order = order or ORDER
     assert order in ("phase_major", "group_major"), order
     g = lambda off: base + off
@@ -79,7 +80,7 @@ def config_phase_dual(anchors=(0, 1), nports=(1, 1), rate=0, field=0x04, base=0,
     for p in range(G.PORT_MAX):
         r = rate if p in anchors else 0
         f = field if p in anchors else nonanchor_field
-        wtx, wrx = G._mode_words(r, f)
+        wtx, wrx = G._mode_words(r, f, lane_hi)
         t.append(("W", P(p, G.O_TX_MODE), wtx))
         t.append(("W", P(p, G.O_RX_MODE), wrx))
 

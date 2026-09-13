@@ -41,6 +41,9 @@ module dcmac_ctl_seq
 
   parameter int          RATE_CODE   = RATE_CODE_100G,
   parameter int          RATE_FIELD  = RATE_FIELD_100G,
+  // The lane rate class of the port mode words, bit 10 and bit 13 above 56 Gb/s a lane and
+  // bit 9 and bit 12 at or below it. 1 is the value the three shipping rates take.
+  parameter bit          LANE_RATE_HI = 1'b1,
   parameter logic [7:0]  DONE_MASK   = DONEMASK_100G,
   parameter logic [19:0] BASE        = 20'h0,
 
@@ -262,8 +265,8 @@ module dcmac_ctl_seq
         r = is_anch(p) ? RATE_CODE  : 0;
         f = is_anch(p) ? RATE_FIELD : RATE_FIELD_NONANCHOR;
         op = OP_WR;
-        if ((pc - P_B8) % 2 == 0) begin a = pp(p, O_TX_MODE); d = tx_mode_word(r, f); end
-        else                      begin a = pp(p, O_RX_MODE); d = rx_mode_word(r, f); end
+        if ((pc - P_B8) % 2 == 0) begin a = pp(p, O_TX_MODE); d = tx_mode_word(r, f, LANE_RATE_HI); end
+        else                      begin a = pp(p, O_RX_MODE); d = rx_mode_word(r, f, LANE_RATE_HI); end
       end
 
       else if (pc == P_B9G + 0) begin op = OP_WR; a = gg(O_PCTL_TX); d = 32'h0; end

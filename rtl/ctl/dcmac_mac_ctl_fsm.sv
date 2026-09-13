@@ -21,11 +21,7 @@ module dcmac_mac_ctl_fsm #(
   parameter int NPORTS          = 1,
   parameter int ANCHOR          = 0,
 
-  parameter int LINK_CONFIRM_N  = 2,
-
-  parameter int PLL_ESC_EVERY   = 0,
-
-  parameter int GT_ESC_AFTER    = 0
+  parameter int LINK_CONFIRM_N  = 2
 )(
   input  logic       seg_clk,
   input  logic       seg_rstn,
@@ -51,8 +47,6 @@ module dcmac_mac_ctl_fsm #(
   output logic       ctl_tx_send_rfi,
 
   output logic                rx_datapath_reset,
-  output logic                rx_pll_datapath_reset,
-  output logic                gt_all_reset_req,
   output logic                rx_serdes_reset_req,
   output logic                rx_flush_req,
 
@@ -98,10 +92,6 @@ module dcmac_mac_ctl_fsm #(
 
   logic [2:0]    state;
   logic          aligned_1d;
-  wire           use_pll_reset = (PLL_ESC_EVERY != 0)
-                               && (esc_phase_r == 8'(PLL_ESC_EVERY - 1));
-  wire           use_gt_all_reset = (GT_ESC_AFTER != 0)
-                                  && (fail_run_r >= 8'(GT_ESC_AFTER - 1));
 
   logic [CW-1:0] rst_cnt;
   logic [CFMW-1:0] fall_cnt;
@@ -110,10 +100,6 @@ module dcmac_mac_ctl_fsm #(
   logic ctl_rx_enable_r, ctl_tx_enable_r;
   logic ctl_tx_send_lfi_r, ctl_tx_send_rfi_r, ctl_tx_send_idle_r;
   logic rx_dp_reset_r;
-  logic rx_pll_dp_reset_r;
-  logic gt_all_reset_r;
-  logic [7:0] fail_run_r;
-  logic [7:0] esc_phase_r;
   logic rx_serdes_req_r;
   logic rx_flush_req_r;
   logic [7:0] repair_cnt_r;
@@ -136,10 +122,6 @@ module dcmac_mac_ctl_fsm #(
       ctl_tx_send_rfi_r  <= 1'b1;
       ctl_tx_send_idle_r <= 1'b0;
       rx_dp_reset_r      <= 1'b0;
-      rx_pll_dp_reset_r  <= 1'b0;
-      gt_all_reset_r     <= 1'b0;
-      fail_run_r         <= '0;
-      esc_phase_r        <= '0;
       rx_serdes_req_r    <= 1'b0;
       rx_flush_req_r     <= 1'b0;
       repair_cnt_r       <= '0;
@@ -157,10 +139,6 @@ module dcmac_mac_ctl_fsm #(
         ctl_tx_send_lfi_r <= 1'b1;
         ctl_tx_send_rfi_r <= 1'b1;
         rx_dp_reset_r     <= 1'b0;
-        rx_pll_dp_reset_r <= 1'b0;
-        gt_all_reset_r    <= 1'b0;
-        fail_run_r        <= '0;
-        esc_phase_r       <= '0;
         rx_serdes_req_r   <= 1'b0;
         rx_flush_req_r    <= 1'b0;
         post_r            <= 1'b0;
@@ -182,7 +160,6 @@ module dcmac_mac_ctl_fsm #(
 
         S_WAIT_ALIGN: begin
           if (aligned_1d) begin
-            fail_run_r <= '0;
             state      <= S_XFER;
           end
           else if (reset_req)  begin
@@ -224,12 +201,9 @@ module dcmac_mac_ctl_fsm #(
 
         S_RX_RESET: begin
           ctl_rx_enable_r   <= 1'b0;
-          rx_dp_reset_r     <= ~use_pll_reset;
-          rx_pll_dp_reset_r <=  use_pll_reset;
-          gt_all_reset_r    <= use_gt_all_reset;
+          rx_dp_reset_r     <= 1'b1;
           if (rst_cnt == '0) begin
             rx_dp_reset_r     <= 1'b0;
-            rx_pll_dp_reset_r <= 1'b0;
             rst_cnt       <= done_cyc;
             state         <= S_RX_DONE;
           end else begin
@@ -268,15 +242,8 @@ module dcmac_mac_ctl_fsm #(
         end
 
         S_RX_SETTLE: begin
-          gt_all_reset_r <= 1'b0;
           if (rst_cnt == '0) begin
             reset_ack_r <= 1'b0;
-            if (GT_ESC_AFTER != 0) begin
-              if (fail_run_r >= 8'(GT_ESC_AFTER - 1)) fail_run_r <= '0;
-              else                                    fail_run_r <= fail_run_r + 8'd1;
-            end
-            esc_phase_r <= (PLL_ESC_EVERY == 0) ? 8'd0
-                         : ((esc_phase_r >= 8'(PLL_ESC_EVERY - 1)) ? 8'd0 : esc_phase_r + 8'd1);
             state       <= S_IDLE;
           end else begin
             rst_cnt <= rst_cnt - 1'b1;
@@ -315,11 +282,9 @@ module dcmac_mac_ctl_fsm #(
   assign ctl_tx_send_rfi     = ctl_tx_send_rfi_r;
 
   assign rx_datapath_reset   = rx_dp_reset_r;
-  assign rx_pll_datapath_reset = rx_pll_dp_reset_r;
-  assign gt_all_reset_req      = gt_all_reset_r;
   assign rx_serdes_reset_req = rx_serdes_req_r;
   assign rx_flush_req        = rx_flush_req_r;
-  assign rx_datapath_reset_ports = (rx_dp_reset_r || rx_pll_dp_reset_r) ? port_group_mask : '0;
+  assign rx_datapath_reset_ports = rx_dp_reset_r ? port_group_mask : '0;
   assign repair_count        = repair_cnt_r;
   assign repair_tmo_count    = repair_tmo_cnt_r;
 

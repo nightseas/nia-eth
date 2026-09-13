@@ -85,15 +85,40 @@ package dcmac_ctl_pkg;
   localparam int RATE_CODE_400G  = 2;   localparam int RATE_FIELD_400G  = 'h10;
   localparam int RATE_FIELD_NONANCHOR = 'h04;
 
-  function automatic logic [31:0] tx_mode_word(input int rate, input int field);
+  // The port mode words carry the lane rate class in one bit a direction. AMD's generated
+  // bring-up code sets bit 10 of TX_MODE and bit 13 of RX_MODE where a lane runs at
+  // 106.25 Gb/s, and bit 9 and bit 12 where a lane runs at 53.125 Gb/s, for every port and
+  // independently of the rate code and the 5 bit field at 20:16. The three generated
+  // configurations of this board are the source: `tu03_1lane` at 100GAUI-1 and
+  // `tu03_2p2l_noanlt_golden` at 2x200GAUI-2 set bit 10 and bit 13, and `dcmac_0_ex` at
+  // 2x200GAUI-4 sets bit 9 and bit 12, in
+  // `dcmac_exdes_test_config.c::dcmac_static_set_datarate` of each.
+  localparam int LANE_CLASS_GBPS      = 56;
+  localparam int TX_MODE_LANE_BIT_HI  = 10;
+  localparam int TX_MODE_LANE_BIT_LO  = 9;
+  localparam int RX_MODE_LANE_BIT_HI  = 13;
+  localparam int RX_MODE_LANE_BIT_LO  = 12;
+
+  // The lane rate class of a port, from the port rate in Gb/s and its lane count. 100GAUI-1,
+  // 200GAUI-2 and 400GAUI-4 are above the threshold and take the high class; 200GAUI-4 and
+  // 400GAUI-8 are at or below it and take the low class.
+  function automatic bit lane_rate_hi(input int rate_gbps, input int gaui);
+    return (gaui <= 0) ? 1'b1 : ((rate_gbps / gaui) > LANE_CLASS_GBPS);
+  endfunction
+
+  function automatic logic [31:0] tx_mode_word(input int rate, input int field,
+                                               input bit lane_hi);
     logic [31:0] w;
-    w = (32'(rate) & 32'h3) | (32'h1 << 4) | (32'h1 << 10);
+    w = (32'(rate) & 32'h3) | (32'h1 << 4)
+        | (32'h1 << (lane_hi ? TX_MODE_LANE_BIT_HI : TX_MODE_LANE_BIT_LO));
     return (w & 32'hFFE0FFFF) | (32'(field) << 16);
   endfunction
 
-  function automatic logic [31:0] rx_mode_word(input int rate, input int field);
+  function automatic logic [31:0] rx_mode_word(input int rate, input int field,
+                                               input bit lane_hi);
     logic [31:0] w;
-    w = (32'(rate) & 32'h3) | (32'h1 << 11) | (32'h1 << 13);
+    w = (32'(rate) & 32'h3) | (32'h1 << 11)
+        | (32'h1 << (lane_hi ? RX_MODE_LANE_BIT_HI : RX_MODE_LANE_BIT_LO));
     return (w & 32'hFFE0FFFF) | (32'(field) << 16);
   endfunction
 

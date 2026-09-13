@@ -36,6 +36,7 @@ export CYC_PER_MS  ?= 20
 export POLL_TRIES  ?= 3
 export RATE_CODE   ?= 0
 export RATE_FIELD  ?= 4
+export LANE_RATE_HI ?= 1
 export DONE_MASK   ?= 3
 GAP_MS      ?= 50
 RX_CYCLES_G ?=
@@ -52,6 +53,7 @@ ifeq ($(SIM),verilator)
     COMPILE_ARGS += -GNPORTS=$(NPORTS) -GANCHOR=$(ANCHOR) \
                     -GCYC_PER_MS=$(CYC_PER_MS) -GPOLL_TRIES=$(POLL_TRIES) \
                     -GRATE_CODE=$(RATE_CODE) -GRATE_FIELD=$(RATE_FIELD) \
+                    -GLANE_RATE_HI=$(LANE_RATE_HI) \
                     -GDONE_MASK=$(DONE_MASK) -GT_PORT_CHAN_GAP_MS=$(GAP_MS)
     ifneq ($(RX_CYCLES_G),)
         COMPILE_ARGS += -GRX_CYCLES=$(RX_CYCLES_G)

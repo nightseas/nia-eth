@@ -40,6 +40,7 @@ set PG1  [expr {[info exists env(NIA_PG1)] ? $env(NIA_PG1) : $base + 0x2000}]
 
 set steps        [expr {[info exists env(NIA_STEPS)]      ? $env(NIA_STEPS)      : "1 2 3 4 5 6"}]
 set bringup_tmo  [expr {[info exists env(NIA_BRINGUP_MS)] ? $env(NIA_BRINGUP_MS) : 10000}]
+set linkup_tmo   [expr {[info exists env(NIA_LINKUP_MS)]  ? $env(NIA_LINKUP_MS)  : 10000}]
 set burst_cap    [expr {[info exists env(NIA_BURST_BYTES)]? $env(NIA_BURST_BYTES): 3000000000}]
 set burst_sizes  [expr {[info exists env(NIA_BURST_SIZES)]? $env(NIA_BURST_SIZES): "64 1518 9018"}]
 set rate_sizes   [expr {[info exists env(NIA_RATE_SIZES)] ? $env(NIA_RATE_SIZES) : "64 65 128 256 512 1024 1518 4096 9018"}]
@@ -104,6 +105,8 @@ set C_RXPHY     0x10
 set C_RETRY     0x14
 set C_STAT_DATA 0x18
 set C_FSM       0x1C
+set C_CHDONE0   0x40
+set C_CHDONE1   0x44
 
 set CC_RESTART   0x01
 set CC_STATS     0x02
@@ -173,7 +176,7 @@ proc pg_counters {pg} {
 }
 
 proc link_status {} {
-  global CMD C_STATUS C_SEQ C_RXPHY C_RETRY C_FSM
+  global CMD C_STATUS C_SEQ C_RXPHY C_RETRY C_FSM C_CHDONE0 C_CHDONE1
   set s(status)  [rd [expr {$CMD + $C_STATUS}]]
   set s(up)      [expr {$s(status) & 0x3}]
   set s(fault)   [expr {($s(status) >> 2) & 0x1}]
@@ -186,6 +189,8 @@ proc link_status {} {
   set s(rxphy)   [rd [expr {$CMD + $C_RXPHY}]]
   set s(retry)   [rd [expr {$CMD + $C_RETRY}]]
   set s(fsm)     [rd [expr {$CMD + $C_FSM}]]
+  set s(chd0)    [rd [expr {$CMD + $C_CHDONE0}]]
+  set s(chd1)    [rd [expr {$CMD + $C_CHDONE1}]]
   return [array get s]
 }
 
@@ -346,8 +351,33 @@ if {[lsearch $steps 1] >= 0} {
 }
 
 if {[lsearch $steps 2] >= 0} {
-  array set s0 [link_status]
-  puts "STEP 2 before restart link_up $s0(up) aligned $s0(aligned) seq_state $s0(state) seq_pc $s0(pc) retry $s0(retry) rxphy [format 0x%08X $s0(rxphy)] fsm [format 0x%02X $s0(fsm)] fault $s0(fault) access_fault $s0(afault) busy $s0(busy)"
+  # The link is given a bounded wait rather than one instantaneous read. A sequencer bring-up that
+  # does not reach link_up is not by itself a defect: the link supervisor asks for a repair every
+  # LINK_WDT_MS, 750 ms, and each repair takes about one second with T_RXDP_MS and T_SERDES_MS at
+  # 100 ms, so the default 10000 ms covers about nine recovery attempts. What the wait measures is
+  # therefore whether the link is up at all, recovery included, and an expiry is a recorded failure
+  # with a time and the channel reset done words against it. Those words are sampled at the first
+  # poll and at the end, so a receive done that asserts and drops is distinguishable from one that
+  # never asserts.
+  set t_wait [now_us]
+  array set sf [link_status]
+  set first_ms 0
+  set wait_ms  -1
+  array set s0 [array get sf]
+  while {1} {
+    array set s0 [link_status]
+    set wl_ms [expr {([now_us] - $t_wait) / 1000}]
+    if {$s0(up) == 3} { set wait_ms $wl_ms ; break }
+    if {$wl_ms > $linkup_tmo} { set wait_ms -1 ; break }
+  }
+  puts "STEP 2 first sample at $first_ms ms link_up $sf(up) aligned $sf(aligned) chdone0 [format 0x%04X $sf(chd0)] chdone1 [format 0x%04X $sf(chd1)]"
+  if {$wait_ms >= 0} {
+    puts "STEP 2 both groups reached link_up 3 after $wait_ms ms of waiting, timeout $linkup_tmo ms"
+  } else {
+    puts "STEP 2 BRINGUP FAIL link_up is $s0(up) after $linkup_tmo ms of waiting, which is about [expr {$linkup_tmo / 1100}] supervisor repair periods, retry $s0(retry) access_fault $s0(afault) seq_state $s0(state) fsm [format 0x%02X $s0(fsm)]"
+  }
+  want 2 [expr {$wait_ms >= 0}] "the first bring-up did not reach link_up 3 inside $linkup_tmo ms, it reads $s0(up) with aligned $s0(aligned) chdone0 [format 0x%04X $s0(chd0)] chdone1 [format 0x%04X $s0(chd1)]"
+  puts "STEP 2 before restart link_up $s0(up) aligned $s0(aligned) seq_state $s0(state) seq_pc $s0(pc) retry $s0(retry) rxphy [format 0x%08X $s0(rxphy)] fsm [format 0x%02X $s0(fsm)] fault $s0(fault) access_fault $s0(afault) busy $s0(busy) chdone0 [format 0x%04X $s0(chd0)] chdone1 [format 0x%04X $s0(chd1)]"
 
   set t_start [now_us]
   cmd_pulse $CC_RESTART

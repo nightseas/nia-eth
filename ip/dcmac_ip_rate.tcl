@@ -205,6 +205,46 @@ proc dcmac_create_ips_rate {key ip_src_dir rate_dir} {
                    53.125 Gb/s where a 200G port has four. A wizard built for the wrong lane rate\
                    divides the reference clock differently and never reaches CDR lock."
         }
+        # The preset is a label. The rate the quad is built from is INTF0_LR0_SETTINGS, and a
+        # wizard whose label was changed without the settings being re-derived carries the old
+        # rate under the new name: that is what ip/rate200g4 held before 2026-09-11, 106.25 Gb/s
+        # with a 53G label, and it is why this reads the settings and not only the label.
+        set want_rate [expr {$key eq "200g4" ? "53.125" : "106.25"}]
+        set lr "<unreadable>"
+        catch { set lr [get_property CONFIG.INTF0_LR0_SETTINGS [get_ips $ip]] }
+        foreach field {TX_LINE_RATE RX_LINE_RATE} {
+            if {![regexp "(^|\\s)$field\\s+(\\S+)" $lr -> _ got]} {
+                error "$ip carries no $field in INTF0_LR0_SETTINGS, so its lane rate cannot be\
+                       verified. The settings read: [string range $lr 0 200]"
+            }
+            if {$got ne $want_rate} {
+                error "$ip has $field = $got in INTF0_LR0_SETTINGS where config $key needs\
+                       $want_rate, whatever INTF0_PRESET says. Regenerate the wizard for this\
+                       configuration rather than renaming its preset."
+            }
+            puts "NIA_RATE_GTWIZ $ip $field = $got  (want $want_rate)"
+        }
+        # The reference clock this board carries is 156.25 MHz on REFCLK0 of banks 202, 203, 204
+        # and 205, from CLK_BUF1, and the DCMAC IP reads GT_REF_CLK_FREQ_C0 156.25 with it. A
+        # wizard configured for another frequency divides the clock it is given for a rate it is
+        # not given: AMD's GTM-PAM4_Ethernet_53G preset carries 161.1328125 MHz, and a wizard left
+        # at that value ran the lanes at 51.5152 Gb/s and the port at 193.94 Gb/s, which is
+        # 156.25 / 161.1328125 of the asked rate. Both ends of a loopback share the error, so the
+        # defect passes a byte exactness test and shows only in the rate table and in an unreliable
+        # bring-up. Plan Section 11.37.25.
+        foreach field {TX_REFCLK_FREQUENCY RX_REFCLK_FREQUENCY} {
+            if {![regexp "(^|\\s)$field\\s+(\\S+)" $lr -> _ got]} {
+                error "$ip carries no $field in INTF0_LR0_SETTINGS, so the reference clock it was\
+                       built for cannot be verified. The settings read: [string range $lr 0 200]"
+            }
+            if {$got ne "156.25"} {
+                error "$ip has $field = $got in INTF0_LR0_SETTINGS where this board carries 156.25\
+                       MHz. Regenerate the wizard with the board reference clock: the LCPLL is\
+                       programmed from this number, so a wizard built for 161.1328125 MHz runs\
+                       every lane at 156.25/161.1328125 of the rate asked for."
+            }
+            puts "NIA_RATE_GTWIZ $ip $field = $got  (want 156.25)"
+        }
     }
 
     nia_dp_preflight_polarity_or_die $key
