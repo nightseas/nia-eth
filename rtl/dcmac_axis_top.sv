@@ -42,6 +42,18 @@ module dcmac_axis_top #(
 
   parameter integer CTL_CYC_PER_MS = 250000,
 
+  parameter logic [7:0] DONE_MASK      = dcmac_ctl_pkg::DONEMASK_100G,
+  parameter int         RATE_CODE      = dcmac_ctl_pkg::RATE_CODE_100G,
+  parameter int         RATE_FIELD     = dcmac_ctl_pkg::RATE_FIELD_100G,
+  parameter logic [7:0] POLARITY_TX_Q0 = dcmac_ctl_pkg::QSFP0_TXPOLARITY,
+  parameter logic [7:0] POLARITY_RX_Q0 = dcmac_ctl_pkg::QSFP0_RXPOLARITY,
+  parameter logic [7:0] POLARITY_TX_Q1 = dcmac_ctl_pkg::QSFP1_TXPOLARITY,
+  parameter logic [7:0] POLARITY_RX_Q1 = dcmac_ctl_pkg::QSFP1_RXPOLARITY,
+  parameter logic [7:0] POLARITY_TX_Q2 = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_RX_Q2 = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_TX_Q3 = 8'b0000_0000,
+  parameter logic [7:0] POLARITY_RX_Q3 = 8'b0000_0000,
+
   parameter integer RX_USER_W = (PTP_TS_EN != 0) ? (PTP_TS_W + 1) : 1,
   parameter integer TX_USER_W = TX_TAG_W + 1,
   parameter integer TX_TAG_WP = (TX_TAG_W > 0) ? TX_TAG_W : 1
@@ -296,6 +308,9 @@ module dcmac_axis_top #(
     .N_GROUP    (1),
     .ANCHOR_1   (ANCHOR),
     .CYC_PER_MS (CTL_CYC_PER_MS),
+    .DONE_MASK  (DONE_MASK),
+    .RATE_CODE  (RATE_CODE),
+    .RATE_FIELD (RATE_FIELD),
 
     .LINK_WDT_MS     (LINK_WDT_MS),
     .SEG_CYC_PER_MS  (SEG_CYC_PER_MS),
@@ -381,6 +396,8 @@ module dcmac_axis_top #(
     .link_remote_fault       (),
     .link_bus_stuck          (),
     .link_ever_aligned       (),
+    .link_align_word         (),
+    .link_align_sticky       (),
     .link_fault_nibble       (),
     .sup_esc_count           (),
     .link_sample_count       (),
@@ -403,7 +420,11 @@ module dcmac_axis_top #(
     .N_CLIENT(1), .GT_LANES(4),
     .N_SEG(N_SEG), .SEG_W(SEG_W), .PORT_MAX(PORT_MAX),
     .LOOPBACK_MODE(LOOPBACK_MODE),
-    .ANCHOR_0(ANCHOR), .ANCHOR_1(ANCHOR + NPORTS)
+    .ANCHOR_0(ANCHOR), .ANCHOR_1(ANCHOR + NPORTS),
+    .POLARITY_TX_Q0(POLARITY_TX_Q0), .POLARITY_RX_Q0(POLARITY_RX_Q0),
+    .POLARITY_TX_Q1(POLARITY_TX_Q1), .POLARITY_RX_Q1(POLARITY_RX_Q1),
+    .POLARITY_TX_Q2(POLARITY_TX_Q2), .POLARITY_RX_Q2(POLARITY_RX_Q2),
+    .POLARITY_TX_Q3(POLARITY_TX_Q3), .POLARITY_RX_Q3(POLARITY_RX_Q3)
   ) u_phy (
     .sys_reset               (sys_reset),
     .gt_ref_clk0_p           (gt_ref_clk_p),

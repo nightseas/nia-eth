@@ -81,6 +81,7 @@ module dcmac_axis_pktgen #(
   localparam logic [WORD_W-1:0] WORD_LEN_CLAMP_STICKY    = 6'h0B;
   localparam logic [WORD_W-1:0] WORD_TX_FRAME_LIMIT      = 6'h0C;
   localparam logic [WORD_W-1:0] WORD_SNAPSHOT_ROUNDS     = 6'h0D;
+  localparam logic [WORD_W-1:0] WORD_TX_GAP_BEATS        = 6'h0E;
   localparam logic [WORD_W-1:0] WORD_TX_FRAMES           = 6'h10;
   localparam logic [WORD_W-1:0] WORD_TX_BYTES            = 6'h11;
   localparam logic [WORD_W-1:0] WORD_RX_FRAMES           = 6'h12;
@@ -116,6 +117,7 @@ module dcmac_axis_pktgen #(
   logic [15:0] cfg_len_max_r;
   logic [1:0]  cfg_len_mode_r;
   logic [31:0] cfg_frame_limit_r;
+  logic [15:0] cfg_gap_beats_r;
   logic [31:0] cfg_bus_check_r;
   logic        cfg_hdr_enable_r;
   logic [31:0] cfg_hdr_dst_mac_low_r;
@@ -142,6 +144,7 @@ module dcmac_axis_pktgen #(
   logic [15:0] net_len_min_r, net_len_max_r;
   logic [1:0]  net_len_mode_r;
   logic [31:0] net_frame_limit_r;
+  logic [15:0] net_gap_beats_r;
   // net_hdr_enable_r and net_hdr_flat_r join the set for the same reason the others are here:
   // the configuration registers are written on axil_aclk and read by the source and the
   // checker on net_clk. cfg_hdr_enable_r reached both of them unregistered, and it is the
@@ -156,12 +159,14 @@ module dcmac_axis_pktgen #(
       net_len_max_r     <= 16'(LEN_MAX_HW);
       net_len_mode_r    <= '0;
       net_frame_limit_r <= '0;
+      net_gap_beats_r   <= '0;
       net_hdr_enable_r  <= 1'b0;
     end else begin
       net_len_min_r     <= cfg_len_min_r;
       net_len_max_r     <= cfg_len_max_r;
       net_len_mode_r    <= cfg_len_mode_r;
       net_frame_limit_r <= cfg_frame_limit_r;
+      net_gap_beats_r   <= cfg_gap_beats_r;
       net_hdr_enable_r  <= cfg_hdr_enable_r;
     end
   end
@@ -249,6 +254,7 @@ module dcmac_axis_pktgen #(
     .cfg_len_max      (net_len_max_r),
     .cfg_len_mode     (net_len_mode_r),
     .cfg_frame_limit  (net_frame_limit_r),
+    .cfg_gap_beats    (net_gap_beats_r),
     .cfg_hdr_enable   (net_hdr_enable_r),
     .cfg_hdr_bytes    (net_hdr_flat_r),
     .m_axis_tdata     (m_axis_tx_tdata),
@@ -356,7 +362,7 @@ module dcmac_axis_pktgen #(
     case (w)
       WORD_MODULE_TYPE, WORD_MAP_VERSION, WORD_BUS_CHECK, WORD_AXIS_GEOMETRY, WORD_FEATURES,
       WORD_CTL, WORD_STATUS, WORD_LEN_MIN, WORD_LEN_MAX, WORD_LEN_MODE, WORD_LEN_EFFECTIVE,
-      WORD_LEN_CLAMP_STICKY, WORD_TX_FRAME_LIMIT, WORD_SNAPSHOT_ROUNDS,
+      WORD_LEN_CLAMP_STICKY, WORD_TX_FRAME_LIMIT, WORD_SNAPSHOT_ROUNDS, WORD_TX_GAP_BEATS,
       WORD_TX_FRAMES, WORD_TX_BYTES, WORD_RX_FRAMES, WORD_RX_BYTES, WORD_RX_ERR_FRAMES,
       WORD_RX_MISMATCH_BEATS,
       WORD_HDR_CTL, WORD_HDR_DST_MAC_LOW, WORD_HDR_DST_MAC_HIGH, WORD_HDR_SRC_MAC_LOW,
@@ -383,6 +389,7 @@ module dcmac_axis_pktgen #(
       WORD_LEN_CLAMP_STICKY:  return {31'd0, clamp_axil};
       WORD_TX_FRAME_LIMIT:    return cfg_frame_limit_r;
       WORD_SNAPSHOT_ROUNDS:   return {24'd0, snap_rounds};
+      WORD_TX_GAP_BEATS:      return {16'd0, cfg_gap_beats_r};
       WORD_TX_FRAMES:         return snap_tx_frames;
       WORD_TX_BYTES:          return snap_tx_bytes;
       WORD_RX_FRAMES:         return snap_rx_frames;
@@ -419,6 +426,7 @@ module dcmac_axis_pktgen #(
       cfg_len_max_r <= 16'(LEN_MIN_HW);
       cfg_len_mode_r <= 2'd0;
       cfg_frame_limit_r <= 32'd0;
+      cfg_gap_beats_r   <= 16'd0;
       cfg_bus_check_r <= 32'd0;
       cfg_hdr_enable_r <= 1'b0;
       cfg_hdr_dst_mac_low_r <= 32'd0;
@@ -460,6 +468,7 @@ module dcmac_axis_pktgen #(
           WORD_LEN_MAX:            cfg_len_max_r <= s_axil_wdata[15:0];
           WORD_LEN_MODE:           cfg_len_mode_r <= s_axil_wdata[1:0];
           WORD_TX_FRAME_LIMIT:     cfg_frame_limit_r <= s_axil_wdata;
+          WORD_TX_GAP_BEATS:       cfg_gap_beats_r   <= s_axil_wdata[15:0];
           WORD_HDR_CTL:            cfg_hdr_enable_r <= s_axil_wdata[CTL_HDR_ENABLE_BIT];
           WORD_HDR_DST_MAC_LOW:    cfg_hdr_dst_mac_low_r <= s_axil_wdata;
           WORD_HDR_DST_MAC_HIGH:   cfg_hdr_dst_mac_high_r <= s_axil_wdata;

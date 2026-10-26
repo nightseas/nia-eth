@@ -46,7 +46,10 @@ module eth_axis_async_fifo #(
 
   logic [ADDR_W:0] wbin, wgray;
   logic [ADDR_W:0] rgray_s1, rgray_s2;
+  logic [ADDR_W:0] rbin, rgray;
+  logic [ADDR_W:0] wgray_s1, wgray_s2;
   logic            wfull;
+  logic            rempty;
 
   wire             wr_en   = s_axis_tvalid & s_axis_tready;
   wire [ADDR_W:0]  wbin_nx = wbin + {{ADDR_W{1'b0}}, wr_en};
@@ -72,10 +75,6 @@ module eth_axis_async_fifo #(
                == {~rgray_s2[ADDR_W:ADDR_W-1], rgray_s2[ADDR_W-2:0]};
     end
   end
-
-  logic [ADDR_W:0] rbin, rgray;
-  logic [ADDR_W:0] wgray_s1, wgray_s2;
-  logic            rempty;
 
   wire            rd_en   = m_axis_tvalid & m_axis_tready;
   wire [ADDR_W:0] rbin_nx = rbin + {{ADDR_W{1'b0}}, rd_en};

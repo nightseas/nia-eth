@@ -68,6 +68,14 @@ if {[lsearch -exact {seg axis} $pktgen] < 0} {
 puts "IMAGE PKTGEN $pktgen"
 
 set stream_w [expr {$rate == 100 ? 512 : 1024}]
+if {[info exists env(NIA_DATA_W)]} {
+  set stream_w $env(NIA_DATA_W)
+  if {$stream_w != 512 && $stream_w != 1024} {
+    puts "IMAGE FAIL: NIA_DATA_W=$stream_w is not one of 512, 1024"
+    exit 2
+  }
+  puts "IMAGE DATA_W override $stream_w, default for RATE=$rate is [expr {$rate == 100 ? 512 : 1024}]"
+}
 
 switch -- $rate {
   100 {

@@ -109,11 +109,13 @@ module dcmac_port #(
 
   (* ASYNC_REG = "TRUE" *) reg [2:0] tx_rstn_sr = 3'b000;
   (* ASYNC_REG = "TRUE" *) reg [2:0] rx_rstn_sr = 3'b000;
+  (* ASYNC_REG = "TRUE" *) reg [2:0] usr_rstn_sr = 3'b000;
   always_ff @(posedge tx_clk) tx_rstn_sr <= {tx_rstn_sr[1:0], ~sys_reset};
   always_ff @(posedge rx_clk) rx_rstn_sr <= {rx_rstn_sr[1:0], ~sys_reset};
+  always_ff @(posedge usr_clk) usr_rstn_sr <= {usr_rstn_sr[1:0], ~sys_reset};
   wire tx_rstn_i = tx_rstn_sr[2];
   wire rx_rstn_i = rx_rstn_sr[2];
-  assign usr_rstn = tx_rstn_i;
+  assign usr_rstn = usr_rstn_sr[2];
 
   dcmac_axis_adapter #(
     .N_SEG(N_SEG), .SEG_W(SEG_W), .DATA_W(DATA_W), .N_STREAM(N_STREAM),

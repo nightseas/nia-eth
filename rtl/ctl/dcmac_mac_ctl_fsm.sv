@@ -98,6 +98,8 @@ module dcmac_mac_ctl_fsm #(
 
   logic [2:0]    state;
   logic          aligned_1d;
+  logic [7:0]    fail_run_r;
+  logic [7:0]    esc_phase_r;
   wire           use_pll_reset = (PLL_ESC_EVERY != 0)
                                && (esc_phase_r == 8'(PLL_ESC_EVERY - 1));
   wire           use_gt_all_reset = (GT_ESC_AFTER != 0)
@@ -112,8 +114,6 @@ module dcmac_mac_ctl_fsm #(
   logic rx_dp_reset_r;
   logic rx_pll_dp_reset_r;
   logic gt_all_reset_r;
-  logic [7:0] fail_run_r;
-  logic [7:0] esc_phase_r;
   logic rx_serdes_req_r;
   logic rx_flush_req_r;
   logic [7:0] repair_cnt_r;

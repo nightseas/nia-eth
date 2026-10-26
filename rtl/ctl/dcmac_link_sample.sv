@@ -139,6 +139,10 @@ module dcmac_link_sample #(
   logic [15:0]   bus_err_r;
   logic          bus_stuck_r;
 
+  wire          wdt_timeout;
+  wire          wdt_running;
+  wire [39:0]   wdt_remaining;
+
   logic [15:0]   sample_cnt_r, esc_cnt_r, bus_err_cnt_r;
 
   logic req_valid_r;
@@ -278,10 +282,6 @@ module dcmac_link_sample #(
       endcase
     end
   end
-
-  wire          wdt_timeout;
-  wire          wdt_running;
-  wire [39:0]   wdt_remaining;
 
   localparam int WDT_MS_MIN_EFF = (LINK_WDT_MS_MIN > (2 * T_SAMPLE_MS))
                                 ? LINK_WDT_MS_MIN : (2 * T_SAMPLE_MS);

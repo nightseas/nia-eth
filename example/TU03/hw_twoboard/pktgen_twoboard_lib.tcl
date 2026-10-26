@@ -15,6 +15,7 @@
 
 set ::twoboard_client_count [expr {[info exists ::env(NIA_CLIENTS)] ? $::env(NIA_CLIENTS) : 2}]
 set ::twoboard_swap_boards  [expr {[info exists ::env(NIA_SWAP)]    ? $::env(NIA_SWAP)    : 0}]
+set ::twoboard_tx_gap_beats [expr {[info exists ::env(NIA_TX_GAP_BEATS)] ? $::env(NIA_TX_GAP_BEATS) : 0}]
 
 set ::twoboard_mixed 0
 set ::WINDOW_CLIENT0 0xA4000000
@@ -60,6 +61,7 @@ set ::REG_LEN_EFFECTIVE     0x28
 set ::REG_LEN_CLAMP_STICKY  0x2C
 set ::REG_TX_FRAME_LIMIT    0x30
 set ::REG_SNAPSHOT_ROUNDS   0x34
+set ::REG_TX_GAP_BEATS      0x38
 set ::REG_TX_FRAMES         0x40
 set ::REG_TX_BYTES          0x44
 set ::REG_RX_FRAMES         0x48
@@ -417,6 +419,7 @@ proc generator_configure {board client length mode frame_limit} {
   board_write $board [expr {$window + $::REG_LEN_MAX}] $length
   board_write $board [expr {$window + $::REG_LEN_MODE}] $mode
   board_write $board [expr {$window + $::REG_TX_FRAME_LIMIT}] $frame_limit
+  board_write $board [expr {$window + $::REG_TX_GAP_BEATS}] $::twoboard_tx_gap_beats
   board_write $board [expr {$window + $::REG_CTL}] 0x0
 }
 

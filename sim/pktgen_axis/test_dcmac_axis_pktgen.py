@@ -38,6 +38,7 @@ A_LEN_EFFECTIVE = 0x28
 A_LEN_CLAMP_STICKY = 0x2C
 A_TX_FRAME_LIMIT = 0x30
 A_SNAPSHOT_ROUNDS = 0x34
+A_TX_GAP_BEATS = 0x38
 A_TX_FRAMES = 0x40
 A_TX_BYTES = 0x44
 A_RX_FRAMES = 0x48
@@ -54,7 +55,6 @@ ST_DONE = 0x02
 
 NET_NS = 4.0
 AXIL_NS = 4.0
-
 
 async def wr(dut, addr, data):
     dut.s_axil_awaddr.value = addr
@@ -83,7 +83,6 @@ async def wr(dut, addr, data):
             return resp
     raise AssertionError(f"write to 0x{addr:03x} never completed")
 
-
 async def rd(dut, addr):
     dut.s_axil_araddr.value = addr
     dut.s_axil_arvalid.value = 1
@@ -102,7 +101,6 @@ async def rd(dut, addr):
             return v, resp
     raise AssertionError(f"read from 0x{addr:03x} never returned")
 
-
 async def start(dut, tready=1):
     cocotb.start_soon(Clock(dut.net_clk, NET_NS, units="ns").start())
     cocotb.start_soon(Clock(dut.axil_aclk, AXIL_NS, units="ns").start())
@@ -118,7 +116,6 @@ async def start(dut, tready=1):
     dut.net_rstn.value = 1
     dut.axil_aresetn.value = 1
     await ClockCycles(dut.axil_aclk, 8)
-
 
 async def run_burst(dut, length, frames, mode=0, hdr=0):
     await wr(dut, A_CTL, CTL_CLEAR)
@@ -145,7 +142,6 @@ async def run_burst(dut, length, frames, mode=0, hdr=0):
         out[name], _ = await rd(dut, addr)
     return out
 
-
 @cocotb.test()
 async def test_identity(dut):
     await start(dut)
@@ -160,7 +156,6 @@ async def test_identity(dut):
     v, _ = await rd(dut, A_BUS_CHECK)
     assert v == 0xA5A51234, f"BUS_CHECK 0x{v:08X}"
 
-
 @cocotb.test()
 async def test_unmapped_offset_answers_and_does_not_stall(dut):
     await start(dut)
@@ -171,7 +166,6 @@ async def test_unmapped_offset_answers_and_does_not_stall(dut):
     assert resp == 2, f"an unmapped write answered with bresp {resp}, not SLVERR"
     mt, _ = await rd(dut, A_MODULE_TYPE)
     assert mt == 0x4E415047, "the register path did not survive an unmapped access"
-
 
 @cocotb.test()
 async def test_byte_exact_min_frame(dut):
@@ -185,7 +179,6 @@ async def test_byte_exact_min_frame(dut):
     assert c["err"] == 0, f"RX_ERR_FRAMES {c['err']}"
     assert c["len"] == 64, f"LEN_EFFECTIVE {c['len']}"
     assert c["rounds"] != 0, "the snapshot never handshook"
-
 
 @cocotb.test()
 async def test_byte_exact_multi_beat(dut):
@@ -202,7 +195,6 @@ async def test_byte_exact_multi_beat(dut):
         assert c["mis"] == 0, f"len {length}: mismatch {c['mis']}"
         assert c["err"] == 0, f"len {length}: RX_ERR_FRAMES {c['err']}"
         assert c["len"] == length, f"len {length}: LEN_EFFECTIVE {c['len']}"
-
 
 @cocotb.test()
 async def test_frames_follow_with_no_idle_beat(dut):
@@ -245,7 +237,6 @@ async def test_frames_follow_with_no_idle_beat(dut):
     assert beats == 200, f"{beats} accepted beats for 200 single-beat frames"
     assert gaps <= 8, f"{gaps} idle cycles inside a 200 frame burst, so frames do not follow one another"
 
-
 @cocotb.test()
 async def test_minimum_frame_is_clamped(dut):
     """PG369 p119 and p126: the minimum frame is four segments even when aborting, and nothing in the
@@ -256,7 +247,6 @@ async def test_minimum_frame_is_clamped(dut):
     assert c["clamp"] == 1, "the clamp is not sticky"
     assert c["txb"] == 20 * 64, f"TX_BYTES {c['txb']}"
     assert c["mis"] == 0, f"mismatch {c['mis']}"
-
 
 @cocotb.test()
 async def test_maximum_frame_is_clamped(dut):
@@ -274,7 +264,6 @@ async def test_maximum_frame_is_clamped(dut):
     assert c["mis"] == 0, f"mismatch {c['mis']}"
     assert c["err"] == 0, f"RX_ERR_FRAMES {c['err']}"
 
-
 @cocotb.test()
 async def test_header_mode_is_byte_exact(dut):
     await start(dut)
@@ -287,7 +276,6 @@ async def test_header_mode_is_byte_exact(dut):
     assert c["txf"] == 30 and c["rxf"] == 30, f"frames {c['txf']}/{c['rxf']}"
     assert c["txb"] == 30 * 128 and c["rxb"] == 30 * 128, f"bytes {c['txb']}/{c['rxb']}"
     assert c["mis"] == 0, f"mismatch {c['mis']} with the header enabled"
-
 
 @cocotb.test()
 async def test_random_length_is_byte_exact(dut):
@@ -316,3 +304,52 @@ async def test_random_length_is_byte_exact(dut):
     assert txb == rxb, f"bytes {txb} against {rxb}"
     assert 60 * 64 <= txb <= 60 * 512, f"TX_BYTES {txb} is outside the requested range"
     assert mis == 0, f"mismatch {mis} in random length mode"
+
+@cocotb.test()
+async def test_gap_beats_set_the_offered_rate(dut):
+    for gap in (0, 1, 3):
+        await start(dut)
+        await wr(dut, A_CTL, CTL_CLEAR)
+        await wr(dut, A_CTL, 0)
+        await wr(dut, A_LEN_MIN, 64)
+        await wr(dut, A_LEN_MAX, 64)
+        await wr(dut, A_LEN_MODE, 0)
+        await wr(dut, A_TX_FRAME_LIMIT, 200)
+        await wr(dut, A_TX_GAP_BEATS, gap)
+        gap_rb, _ = await rd(dut, A_TX_GAP_BEATS)
+        assert gap_rb == gap, f"gap register read back {gap_rb} instead of {gap}"
+
+        async def watch():
+            beats = 0
+            cycles = 0
+            started = False
+            idle_after = 0
+            while cycles < 20000:
+                await RisingEdge(dut.net_clk)
+                if started:
+                    cycles += 1
+                if int(dut.tx_tvalid.value) and int(dut.tx_tready.value):
+                    beats += 1
+                    started = True
+                    idle_after = 0
+                elif started:
+                    idle_after += 1
+                    if beats >= 200 and idle_after > 4 * (gap + 2):
+                        break
+            return beats, cycles - idle_after
+
+        task = cocotb.start_soon(watch())
+        await wr(dut, A_CTL, CTL_ENABLE)
+        beats, cycles = await task
+        await wr(dut, A_CTL, 0)
+        assert beats == 200, f"gap {gap}: {beats} accepted beats for 200 single-beat frames"
+        tx_frames, _ = await rd(dut, A_TX_FRAMES)
+        assert tx_frames == 200, f"gap {gap}: transmit frame count is {tx_frames}"
+        rx_frames, _ = await rd(dut, A_RX_FRAMES)
+        assert rx_frames == 200, f"gap {gap}: receive frame count is {rx_frames}"
+        mismatch, _ = await rd(dut, A_RX_MISMATCH_BEATS)
+        assert mismatch == 0, f"gap {gap}: {mismatch} mismatched beats in loopback"
+        low = 200 * (1 + gap) - 8
+        high = 200 * (2 + gap) + 8
+        assert low <= cycles <= high, \
+            f"gap {gap}: burst took {cycles} cycles, outside {low} to {high}"

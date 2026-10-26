@@ -56,6 +56,7 @@ for g in \
 	sim/gate/gate_flow_defaults.py \
 	sim/gate/gate_port_width_params.py \
 	sim/gate/gate_instrument_elab.py \
+	sim/gate/gate_axis_top_rate_elab.py \
 	sim/gate/gate_done_mask_matches_phy.py \
 	sim/gate/preflight_anchors.py
 do
@@ -72,6 +73,7 @@ do
 		*gate_tcl_syntax.py) run_gate "$g" "$ROOT" ;;
 		*gate_stream_rate.py) run_gate "$g" ;;
 		*gate_instrument_elab.py) run_gate "$g" ;;
+		*gate_axis_top_rate_elab.py) run_gate "$g" ;;
 		*gate_seg_sum_saturation.py) run_gate "$g" ;;
 		*) run_gate "$g" "$ROOT" ;;
 		esac

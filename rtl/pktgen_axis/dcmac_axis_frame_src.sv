@@ -31,6 +31,7 @@ module dcmac_axis_frame_src #(
   input  wire [15:0]             cfg_len_max,
   input  wire [1:0]              cfg_len_mode,
   input  wire [31:0]             cfg_frame_limit,
+  input  wire [15:0]             cfg_gap_beats,
 
   input  wire                    cfg_hdr_enable,
   input  wire [HDR_B*8-1:0]      cfg_hdr_bytes,
@@ -79,6 +80,8 @@ module dcmac_axis_frame_src #(
   logic [31:0]       bytes_r;
   logic              run_r;
   logic              done_r;
+  logic [15:0]       gap_r;
+  logic              armed_r;
   logic              hdr_beat_r;
   logic [15:0]       lfsr_r;
   logic [HDR_B*8-1:0] hdr_r;
@@ -177,7 +180,10 @@ module dcmac_axis_frame_src #(
   wire               clamp_nx      = rand_mode ? clamp_rand_d_r    : clamp_fixed_d_r;
 
   wire last_frame = limit_en_r & (frames_left_r == 32'd1);
-  wire load       = ctl_enable & ~done_r & (~run_r | eof) & ~(eof & last_frame);
+  wire gap_en     = (cfg_gap_beats != 16'd0);
+  wire gap_active = (gap_r != 16'd0);
+  wire load       = ctl_enable & ~done_r & ~gap_active
+                  & (~run_r | (eof & ~gap_en)) & ~(eof & last_frame);
 
   always_ff @(posedge clk) begin
     if (!rstn) begin
@@ -191,6 +197,8 @@ module dcmac_axis_frame_src #(
       bytes_r     <= '0;
       run_r       <= 1'b0;
       done_r      <= 1'b0;
+      gap_r       <= 16'd0;
+      armed_r     <= 1'b0;
       hdr_beat_r  <= 1'b1;
       lfsr_r      <= 16'hACE1;
     end else if (ctl_clear) begin
@@ -201,9 +209,13 @@ module dcmac_axis_frame_src #(
       done_r      <= 1'b0;
       beat_r      <= '0;
       run_r       <= 1'b0;
+      gap_r       <= 16'd0;
+      armed_r     <= 1'b0;
       hdr_beat_r  <= 1'b1;
     end else begin
-      if (!run_r) frames_left_r <= cfg_frame_limit;
+      if (!armed_r) frames_left_r <= cfg_frame_limit;
+
+      if (gap_active) gap_r <= gap_r - 16'd1;
 
       if (eof) begin
         frames_r <= frames_r + 32'd1;
@@ -212,10 +224,14 @@ module dcmac_axis_frame_src #(
         if (last_frame) begin
           done_r <= 1'b1;
           run_r  <= 1'b0;
+        end else if (gap_en) begin
+          run_r <= 1'b0;
+          gap_r <= cfg_gap_beats;
         end
       end
 
       if (load) begin
+        armed_r     <= 1'b1;
         len_r       <= len_nxt;
         beat_last_r <= beat_last_nxt;
         keep_last_r <= keep_last_nxt;
@@ -230,8 +246,10 @@ module dcmac_axis_frame_src #(
       end
 
       if (!ctl_enable) begin
-        run_r  <= 1'b0;
-        beat_r <= '0;
+        run_r   <= 1'b0;
+        beat_r  <= '0;
+        gap_r   <= 16'd0;
+        armed_r <= 1'b0;
       end
     end
   end

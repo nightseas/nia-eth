@@ -14,23 +14,37 @@ set ::nia_rate_ip_dir [file dirname [file normalize [info script]]]
 
 proc nia_rate_ip_files {key} {
     switch -- $key {
-        200     { return [list dcmac_0_gtwiz_versal_0.xci dcmac_0_gtwiz_versal_1.xci] }
-        200g4   { return [list dcmac_0_gtwiz_versal_0.xci dcmac_0_gtwiz_versal_1.xci] }
-        400     { return [list dcmac_0_gtwiz_versal_0.xci] }
-        default { error "nia_rate_ip_files: '$key' is not 200, 200g4 or 400" }
+        200       { return [list dcmac_0_gtwiz_versal_0.xci dcmac_0_gtwiz_versal_1.xci] }
+        200single { return [list dcmac_0_gtwiz_versal_0.xci] }
+        200g4     { return [list dcmac_0_gtwiz_versal_0.xci dcmac_0_gtwiz_versal_1.xci] }
+        400       { return [list dcmac_0_gtwiz_versal_0.xci] }
+        default   { error "nia_rate_ip_files: '$key' is not 200, 200single, 200g4 or 400" }
     }
 }
 
 proc nia_rate_ip_subdir {key} {
     switch -- $key {
-        200     { return rate200 }
-        200g4   { return rate200g4 }
-        400     { return rate400 }
-        default { error "nia_rate_ip_subdir: '$key' is not 200, 200g4 or 400" }
+        200       { return rate200 }
+        200single { return rate200 }
+        200g4     { return rate200g4 }
+        400       { return rate400 }
+        default   { error "nia_rate_ip_subdir: '$key' is not 200, 200single, 200g4 or 400" }
     }
 }
 
 proc nia_rate_dcmac_cfg {key} {
+    if {$key eq "200single"} {
+        return [list \
+            CONFIG.MAC_PORT0_CONFIG_C0 {200GAUI-2} \
+            CONFIG.MAC_PORT0_ENABLE_AN_LT_C0 {0} \
+            CONFIG.MAC_PORT1_ENABLE_C0 {1} \
+            CONFIG.MAC_PORT1_ENABLE_AN_LT_C0 {0} \
+            CONFIG.MAC_PORT2_ENABLE_C0 {0} \
+            CONFIG.MAC_PORT3_ENABLE_C0 {0} \
+            CONFIG.MAC_PORT4_ENABLE_C0 {0} \
+            CONFIG.MAC_PORT5_ENABLE_C0 {0} \
+            CONFIG.TIMESTAMP_CLK_PERIOD_NS {2.4}]
+    }
     if {$key eq "200g4"} {
         return [list \
             CONFIG.MAC_PORT0_CONFIG_C0 {200GAUI-4} \
@@ -76,7 +90,58 @@ proc nia_rate_dcmac_cfg {key} {
             CONFIG.MAC_PORT5_ENABLE_C0 {0} \
             CONFIG.TIMESTAMP_CLK_PERIOD_NS {2.4}]
     }
-    error "nia_rate_dcmac_cfg: '$key' is not 200, 200g4 or 400"
+    error "nia_rate_dcmac_cfg: '$key' is not 200, 200single, 200g4 or 400"
+}
+
+proc nia_rate_usr_clk_datapath_port_index {} {
+    set ports [split [get_property CONFIG.CLKOUT_PORT [get_ips dcmac_usr_clk_wiz]] ,]
+    set index 1
+    foreach port $ports {
+        if {[string trim $port] eq "clk_out3"} { return $index }
+        incr index
+    }
+    error "NIA_RATE_IP FAIL: dcmac_usr_clk_wiz declares no clk_out3, so the datapath output cannot\
+ be identified and its achieved frequency cannot be checked"
+}
+
+proc nia_rate_check_usr_clk_achieved {requested_mhz} {
+    set ip [get_ips dcmac_usr_clk_wiz]
+    set input_mhz [get_property CONFIG.PRIM_IN_FREQ $ip]
+    set multiply  [get_property CONFIG.CLKFBOUT_MULT $ip]
+    set pre_div   [get_property CONFIG.DIVCLK_DIVIDE $ip]
+    set index     [nia_rate_usr_clk_datapath_port_index]
+    set out_div   [get_property CONFIG.CLKOUT${index}_DIVIDE $ip]
+    if {$pre_div == 0 || $out_div == 0} {
+        error "NIA_RATE_IP FAIL: dcmac_usr_clk_wiz reports a zero divider, so no achieved frequency\
+ can be computed"
+    }
+    set oscillator_mhz [expr {double($input_mhz) * double($multiply) / double($pre_div)}]
+    set achieved_mhz   [expr {$oscillator_mhz / double($out_div)}]
+    set error_mhz      [expr {abs($achieved_mhz - double($requested_mhz))}]
+    puts [format "NIA_RATE_IP USR_CLK requested %.6f achieved %.6f oscillator %.3f multiply %s\
+ pre_divide %s out_divide %s port_index %s error %.6f MHz" \
+        $requested_mhz $achieved_mhz $oscillator_mhz $multiply $pre_div $out_div $index $error_mhz]
+    if {$error_mhz > 0.001} {
+        set message "NIA_RATE_IP FAIL: dcmac_usr_clk_wiz achieves [format %.6f $achieved_mhz] MHz\
+ where [format %.6f $requested_mhz] MHz was requested, a shortfall of\
+ [format %.6f $error_mhz] MHz. The datapath carries 512 bits a beat, so the line rate it sustains\
+ scales with this frequency and a substitution below the request puts the design under its declared\
+ rate. The requested set is not reachable on one clocking primitive where the output dividers shall\
+ be integers: read the oscillator frequency above against the other requested outputs. Give the\
+ datapath output its own clocking primitive, or take it from the golden clock wizard, whose output\
+ this design already carries."
+        if {[info exists ::env(NIA_USR_CLK_ACCEPT_SUBSTITUTION)] \
+            && $::env(NIA_USR_CLK_ACCEPT_SUBSTITUTION) eq "1"} {
+            puts "$message"
+            puts "NIA_RATE_IP USR_CLK SUBSTITUTION ACCEPTED (OWNER-ENABLED). Every rate figure of\
+ this build is bounded by [format %.6f $achieved_mhz] MHz and not by\
+ [format %.6f $requested_mhz] MHz, and every timing figure is measured against\
+ [format %.6f [expr {1000.0 / $achieved_mhz}]] ns rather than\
+ [format %.6f [expr {1000.0 / $requested_mhz}]] ns."
+        } else {
+            error "$message"
+        }
+    }
 }
 
 proc dcmac_create_ips_rate {key ip_src_dir rate_dir} {
@@ -91,7 +156,9 @@ proc dcmac_create_ips_rate {key ip_src_dir rate_dir} {
         if {![file exists [file join $rate_dir $f]]} {
             error "dcmac_create_ips_rate: missing [file join $rate_dir $f]. The wizard XCIs of a\
                    configuration are generated products and this script does not invent them: a\
-                   200GAUI-2 client is a 4-lane one-quad wizard at 106.25 Gb/s a lane, a 200GAUI-4\
+                   200GAUI-2 client is a 4-lane one-quad wizard at 106.25 Gb/s a lane, and the\
+                   single client configuration 200single takes one of them rather than two, a\
+                   200GAUI-4\
                    client is the same 4-lane one-quad wizard at 53.125 Gb/s a lane, and a 400GAUI-4\
                    client is one 8-lane two-quad wizard at 106.25 Gb/s a lane. The 200GAUI-4 wizards\
                    differ from the 200GAUI-2 ones in INTF0_PRESET alone."
@@ -165,6 +232,8 @@ proc dcmac_create_ips_rate {key ip_src_dir rate_dir} {
               [get_property CONFIG.$k [get_ips dcmac_usr_clk_wiz]]"
     }
 
+    nia_rate_check_usr_clk_achieved $nia_usr_freq
+
     set want_wiz  $::nia_dp_pol_rate_wiz($key)
     set want_lane $::nia_dp_pol_rate_lane($key)
     set want_quad [nia_dp_pol_banks_per_wiz $key]
@@ -175,7 +244,9 @@ proc dcmac_create_ips_rate {key ip_src_dir rate_dir} {
     if {[llength $gtwiz] != $want_wiz} {
         error "expected $want_wiz gtwiz IP(s) at config $key, found [llength $gtwiz]: '$gtwiz'. At\
                200GAUI-2 and at 200GAUI-4 there is one per cage, because one wizard cannot reach two\
-               QSFP cages; at 400GAUI-4 there is exactly one, covering the two quads of QSFP0."
+               QSFP cages; at the single client 200single there is exactly one, the quad of bank 202\
+               that carries QSFP0 lanes 0 and 1; at 400GAUI-4 there is exactly one, covering the two\
+               quads of QSFP0."
     }
     foreach ip $gtwiz {
         set l "<unreadable>"

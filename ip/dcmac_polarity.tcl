@@ -47,9 +47,10 @@ proc nia_dp_pol_enable_ports {} {
         error "nia_dp_pol_enable_ports: no gtwiz_versal IP in the project - the DCMAC IP recipe\
                must import its XCI(s) before this is called. The dual 100GAUI-1 and dual 200GAUI-2\
                images import TWO, one per client and one quad each, because one quad cannot reach\
-               two QSFP cages; the dual 200GAUI-4 image imports TWO of one quad each, one cage\
-               each; the single 400GAUI-4 image imports ONE, which carries two quads of the same\
-               cage."
+               two QSFP cages; the single 200GAUI-2 image imports ONE, the quad of bank 202, which\
+               is QSFP0 lanes 0 and 1; the dual 200GAUI-4 image imports TWO of one quad each, one\
+               cage each; the single 400GAUI-4 image imports ONE, which carries two quads of the\
+               same cage."
     }
     nia_dp_log "gtwiz IPs: $gtwiz"
     set touched {}
@@ -137,27 +138,29 @@ set ::nia_pol_rtl [file normalize [file join [file dirname [info script]] .. rtl
 # a 3x200GE 200GAUI-4 configuration requires three GTM quads, which is one quad a port, and
 # the Vivado example design for 200GAUI-4 carries INTF0_NO_OF_LANES 4 with NO_OF_QUADS 1. The
 # key is formed by nia_dp_pol_config_key from NIA_RATE and NIA_GAUI.
-array set ::nia_dp_pol_rate_wiz  {100 2 200 2 200g4 2 400 1}
-array set ::nia_dp_pol_rate_lane {100 2 200 4 200g4 4 400 8}
+array set ::nia_dp_pol_rate_wiz  {100 2 200 2 200single 1 200g4 2 400 1}
+array set ::nia_dp_pol_rate_lane {100 2 200 4 200single 4 200g4 4 400 8}
 array set ::nia_dp_pol_rate_phy  {100 dcmac_phy_wrapper.sv
                                   200 rate/dcmac_phy_wrapper_200g.sv
+                                  200single rate/dcmac_phy_wrapper_200g.sv
                                   200g4 rate/dcmac_phy_wrapper_200g.sv
                                   400 rate/dcmac_phy_wrapper_400g.sv}
-array set ::nia_dp_pol_rate_bank {100 {202 204} 200 {202 204} 200g4 {202 204}
-                                  400 {202 203}}
+array set ::nia_dp_pol_rate_bank {100 {202 204} 200 {202 204} 200single {202}
+                                  200g4 {202 204} 400 {202 203}}
 # The keys whose PHY takes its polarity defaults from dcmac_ctl_pkg::QSFP0_* and QSFP1_*,
 # which describe bank 202 and bank 204. A key that reaches bank 203 or bank 205 carries its
 # own literals from nia_dp_pol_tx and nia_dp_pol_rx instead, because the QSFP1 rows describe
 # bank 204 alone and their receive halves differ from bank 203 and bank 205.
-array set ::nia_dp_pol_rate_pkgdefault {100 1 200 1 200g4 1 400 0}
+array set ::nia_dp_pol_rate_pkgdefault {100 1 200 1 200single 1 200g4 1 400 0}
 
 array set ::nia_dp_gaui_default {100 1 200 2 400 4}
 
-proc nia_dp_pol_config_key {rate {gaui 0}} {
+proc nia_dp_pol_config_key {rate {gaui 0} {clients 0}} {
     if {![info exists ::nia_dp_gaui_default($rate)]} {
         error "nia_dp_pol_config_key: NIA_RATE=$rate is not one of 100, 200, 400"
     }
     if {$gaui == 0} { set gaui $::nia_dp_gaui_default($rate) }
+    if {$rate == 200 && $gaui == 2 && $clients == 1} { return 200single }
     if {$gaui == $::nia_dp_gaui_default($rate)} { return $rate }
     if {$rate == 200 && $gaui == 4} { return 200g4 }
     error "nia_dp_pol_config_key: NIA_RATE=$rate with NIA_GAUI=$gaui is not a configuration this\
@@ -222,6 +225,11 @@ proc nia_dp_pol_assert {{key 100}} {
                   quad, so with one gtwiz the second cage does not exist to be polarised: one quad\
                   cannot reach two QSFP cages). At 200GAUI-4 each of the two wizards carries the\
                   TWO quads of its own cage, so the count is still two and the lane count is eight."
+        } elseif {$key eq "200single"} {
+            puts "NIA_DP_POLARITY C1 FAIL expected ONE gtwiz IP at configuration $key: a single\
+                  200GAUI-2 client is two wire lanes of 106.25 Gb/s, which is four GT channels on\
+                  the one quad of bank 202, and it reaches QSFP0 lanes 0 and 1 alone. Two wizards\
+                  here means the dual configuration crept in and a second cage would be driven."
         } else {
             puts "NIA_DP_POLARITY C1 FAIL expected ONE gtwiz IP at rate $rate: a 400GAUI-4 client is\
                   eight lanes across two quads of the SAME cage and the harvested\
